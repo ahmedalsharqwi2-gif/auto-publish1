@@ -613,13 +613,17 @@ def ensure_arabic_font() -> Path:
 
 
 def _arabic_display(line: str) -> str:
-    """Shape Arabic first, then apply bidi display ordering (never reverse manually)."""
+    """Shape an already unvowelled Arabic line, then apply bidi ordering.
+
+    The input is deliberately stripped of Arabic harakat before wrapping and
+    before shaping. This prevents combining marks from being reordered or
+    visually detached by the rasterizer while preserving connected glyphs.
+    """
     import arabic_reshaper
     from bidi.algorithm import get_display
 
-    configuration = {"delete_harakat": False, "support_ligatures": True}
-    reshaper = arabic_reshaper.ArabicReshaper(configuration=configuration)
-    return get_display(reshaper.reshape(line))
+    reshaped_line = arabic_reshaper.reshape(line)
+    return get_display(reshaped_line)
 
 
 def build_subtitle_video(text: str, duration: float, out_dir: Path) -> Path:
@@ -649,7 +653,9 @@ def build_subtitle_video(text: str, duration: float, out_dir: Path) -> Path:
             font.set_variation_by_name("Bold")
         except (OSError, ValueError):
             log.warning("Could not select Cairo Bold variation; using default instance")
-    words = text.split()
+    # Remove all Arabic harakat before word wrapping or any RTL processing.
+    plain_text = re.sub(r"[\u0617-\u061A\u064B-\u0652]", "", text)
+    words = plain_text.split()
     chunks = [words[i:i + 4] for i in range(0, len(words), 4)] or [[]]
     per_chunk = duration / len(chunks)
     image_paths: list[Path] = []
