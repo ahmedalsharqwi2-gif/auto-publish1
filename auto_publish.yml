@@ -3,12 +3,21 @@ name: Auto Publish Shorts
 on:
   workflow_dispatch: {}   # allows manual runs from the Actions tab
   schedule:
-    # Egypt is UTC+2 (Cairo standard time, no DST). Adjust by 1 hour if/when
-    # Egypt observes daylight saving during your run window.
-    # 3:00 PM Cairo -> 13:00 UTC
-    - cron: "0 13 * * *"
-    # 9:00 PM Cairo -> 19:00 UTC
-    - cron: "0 19 * * *"
+    # Egypt currently observes DST (Egyptian Eastern Summer Time, UTC+3)
+    # from the last Friday of April through the last Friday of October.
+    # As of writing (Sep 2026) Cairo is UTC+3, so the cron below is offset
+    # by -3 hours from Cairo local time, NOT -2. This will need to change
+    # back to UTC+2 offsets once Egypt reverts to standard time on
+    # Oct 29, 2026 (i.e. back to "0 13 * * *" / "0 19 * * *").
+    #
+    # 3:00 PM Cairo (UTC+3, DST) -> 12:00 UTC
+    - cron: "0 12 * * *"
+    # 9:00 PM Cairo (UTC+3, DST) -> 18:00 UTC
+    - cron: "0 18 * * *"
+    #
+    # --- After Oct 29, 2026 (Egypt back to UTC+2 standard time), swap to: ---
+    # - cron: "0 13 * * *"   # 3:00 PM Cairo (UTC+2)
+    # - cron: "0 19 * * *"   # 9:00 PM Cairo (UTC+2)
 
 concurrency:
   group: auto-publish-${{ github.ref }}
