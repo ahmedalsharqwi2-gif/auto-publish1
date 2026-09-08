@@ -291,7 +291,9 @@ def generate_topic() -> Topic:
             "model": GROQ_MODEL,
             "messages": messages,
             "response_format": {"type": "json_object"},
-            "max_completion_tokens": 1536,
+            # GPT-OSS may spend completion tokens on reasoning before emitting
+            # JSON; 1536 was too small and caused json_validate_failed.
+            "max_completion_tokens": 4096,
             "reasoning_effort": "low",
             "temperature": 0.9,
         }
