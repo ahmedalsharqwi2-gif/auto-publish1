@@ -568,6 +568,22 @@ def assemble_video(
 # in this same repository; GitHub serves release assets over a public HTTPS
 # URL with no login required.
 
+def _ensure_repo_is_public(api_base: str, headers: dict[str, str]) -> None:
+    """GitHub Release assets on a PRIVATE repo require an authenticated
+    request to download — Buffer's fetch bot has no such credentials, so it
+    gets a generic 'Video could not be read from its URL.' error. Fail fast
+    with a clear message instead of letting that opaque error surface later."""
+    resp = requests.get(api_base, headers=headers, timeout=30)
+    if resp.status_code == 200 and resp.json().get("private"):
+        raise PipelineError(
+            "This repository is Private. GitHub Release assets in a private repo can't be "
+            "downloaded without authentication, so Buffer's bot can't fetch the video from its "
+            "public URL (this is what causes Buffer's 'Video could not be read from its URL.' "
+            "error). Fix: make the repository Public — Settings -> General -> Danger Zone -> "
+            "Change visibility -> Make public."
+        )
+
+
 def host_video_on_github(video_path: Path, run_id: str) -> str:
     if not GH_RELEASE_TOKEN or not GITHUB_REPOSITORY:
         raise PipelineError(
@@ -583,6 +599,7 @@ def host_video_on_github(video_path: Path, run_id: str) -> str:
         "Authorization": f"Bearer {GH_RELEASE_TOKEN}",
         "Accept": "application/vnd.github+json",
     }
+    _ensure_repo_is_public(api_base, headers)
 
     def _create_release() -> dict[str, Any]:
         resp = requests.post(
@@ -629,7 +646,7 @@ def host_video_on_github(video_path: Path, run_id: str) -> str:
 # ---------------------------------------------------------------------------
 
 _BUFFER_CREATE_POST_MUTATION = """
-mutation CreatePost($channelId: ChannelId!, $text: String!, $videoUrl: String!) {
+mutation CreatePost($channelId: ChannelId!, $text: String!, $videoUrl: String!, $metadata: PostInputMetaData) {
   createPost(
     input: {
       text: $text
@@ -637,6 +654,7 @@ mutation CreatePost($channelId: ChannelId!, $text: String!, $videoUrl: String!) 
       schedulingType: automatic
       mode: shareNow
       assets: [{ video: { url: $videoUrl } }]
+      metadata: $metadata
     }
   ) {
     ... on PostActionSuccess {
@@ -648,6 +666,63 @@ mutation CreatePost($channelId: ChannelId!, $text: String!, $videoUrl: String!) 
   }
 }
 """
+
+_GET_CHANNEL_QUERY = """
+query GetChannel($id: String!) {
+  channel(input: { id: $id }) {
+    id
+    service
+  }
+}
+"""
+
+# YouTube requires a category on every video post. 24 = Entertainment, a
+# reasonable default for viral short-form facts content. Override via the
+# YOUTUBE_CATEGORY_ID env var if you'd rather use another category
+# (e.g. 27 = Education, 28 = Science & Technology).
+YOUTUBE_CATEGORY_ID = os.getenv("YOUTUBE_CATEGORY_ID", "24")
+
+
+def get_channel_service(channel_id: str) -> str:
+    """Ask Buffer which platform (youtube/facebook/tiktok/...) a channel ID
+    belongs to, so we know which network-specific fields it requires."""
+
+    def _call() -> str:
+        resp = requests.post(
+            BUFFER_ENDPOINT,
+            headers={
+                "Authorization": f"Bearer {BUFFER_API_KEY}",
+                "Content-Type": "application/json",
+            },
+            json={"query": _GET_CHANNEL_QUERY, "variables": {"id": channel_id}},
+            timeout=30,
+        )
+        if resp.status_code != 200:
+            raise PipelineError(
+                f"Buffer API error {resp.status_code} while looking up channel {channel_id}: {resp.text[:500]}"
+            )
+        data = resp.json()
+        if data.get("errors"):
+            raise PipelineError(f"Buffer API error looking up channel {channel_id}: {data['errors']}")
+        service = ((data.get("data") or {}).get("channel") or {}).get("service")
+        if not service:
+            raise PipelineError(f"Could not resolve 'service' for Buffer channel {channel_id}: {data}")
+        return service
+
+    return with_retries(_call, what=f"look up Buffer channel {channel_id}")
+
+
+def build_channel_metadata(service: str, topic: Topic) -> dict[str, Any] | None:
+    """Different networks require different per-post fields on a video post
+    (this is why the same generic mutation failed with network-specific
+    'X is required' errors). Only the channel's own network needs metadata."""
+    service = (service or "").lower()
+    if service == "youtube":
+        return {"youtube": {"title": topic.title[:100], "categoryId": YOUTUBE_CATEGORY_ID}}
+    if service == "facebook":
+        # A 9:16 vertical video published to a Facebook Page is a Reel.
+        return {"facebook": {"type": "reel"}}
+    return None
 
 
 def publish_video(video_path: Path, topic: Topic, channel_ids: list[str]) -> dict[str, Any]:
@@ -662,7 +737,11 @@ def publish_video(video_path: Path, topic: Topic, channel_ids: list[str]) -> dic
     failed: list[str] = []
 
     for channel_id in channel_ids:
-        def _call(channel_id: str = channel_id) -> dict[str, Any]:
+        service = get_channel_service(channel_id)
+        metadata = build_channel_metadata(service, topic)
+        log.info("Channel %s resolved to service=%s metadata=%s", channel_id, service, metadata)
+
+        def _call(channel_id: str = channel_id, metadata: dict[str, Any] | None = metadata) -> dict[str, Any]:
             resp = requests.post(
                 BUFFER_ENDPOINT,
                 headers={
@@ -671,7 +750,12 @@ def publish_video(video_path: Path, topic: Topic, channel_ids: list[str]) -> dic
                 },
                 json={
                     "query": _BUFFER_CREATE_POST_MUTATION,
-                    "variables": {"channelId": channel_id, "text": text, "videoUrl": video_url},
+                    "variables": {
+                        "channelId": channel_id,
+                        "text": text,
+                        "videoUrl": video_url,
+                        "metadata": metadata,
+                    },
                 },
                 timeout=60,
             )
