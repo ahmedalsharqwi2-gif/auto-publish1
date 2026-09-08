@@ -569,9 +569,10 @@ def build_srt(text: str, duration: float, out_path: Path) -> Path:
     videos; swap in a forced-aligner/Whisper timestamp pass for
     frame-perfect sync."""
     words = text.split()
-    # Keep every cue on exactly one subtitle line, with at least four words.
-    # A tiny font and wide margins prevent libass from wrapping the cue.
-    chunk_size = 6
+    # Keep each cue as a compact two-line block. Eight words maximum means
+    # four words per line in the usual case, while the final short cue is
+    # split evenly so it also stays on two lines.
+    chunk_size = 8
     word_chunks = [words[i:i + chunk_size] for i in range(0, len(words), chunk_size)] or [words]
     per_chunk = duration / len(word_chunks)
 
@@ -586,7 +587,10 @@ def build_srt(text: str, duration: float, out_path: Path) -> Path:
     for i, chunk_words in enumerate(word_chunks):
         start = i * per_chunk
         end = (i + 1) * per_chunk
-        chunk_text = " ".join(chunk_words)
+        split_at = max(1, (len(chunk_words) + 1) // 2)
+        chunk_text = " ".join(chunk_words[:split_at])
+        if len(chunk_words) > 1:
+            chunk_text += "\n" + " ".join(chunk_words[split_at:])
         lines.append(str(i + 1))
         lines.append(f"{fmt(start)} --> {fmt(end)}")
         lines.append(chunk_text)
@@ -620,17 +624,17 @@ def assemble_video(
         # with MarginV as the distance down from the top edge — kept small
         # enough (90px on a 1920px-tall frame) to sit right under the
         # phone status bar / app icons that platforms overlay at the very
-        # top safe zone, 300px below the frame edge. FontSize is intentionally
-        # tiny so a 6-word chunk stays on one line on an actual mobile
+        # top safe zone, directly below the selfie-camera notch. FontSize is
+        # intentionally extremely small so the two-line block stays discreet
         # screen instead of dominating it. BorderStyle=1 (outline+shadow
         # only) plus a light Outline=1.5 keeps the white text crisp and
         # readable without a thick blobby border. MarginL/MarginR give
         # each chunk plenty of width headroom so libass never auto-wraps
         # it onto a second line.
         f"subtitles='{srt_filter_path}':original_size={VIDEO_W}x{VIDEO_H}:force_style="
-        "'FontName=Arial,FontSize=12,Bold=1,PrimaryColour=&H00FFFFFF,"
+        "'FontName=Arial,FontSize=8,Bold=1,PrimaryColour=&H00FFFFFF,"
         "OutlineColour=&H00000000,BorderStyle=1,Outline=1.5,Shadow=0,"
-        "Alignment=8,MarginV=300,MarginL=35,MarginR=35,WrapStyle=2'"
+        "Alignment=8,MarginV=260,MarginL=35,MarginR=35,WrapStyle=2'"
     )
 
     audio_inputs = ["-i", str(narration)]
