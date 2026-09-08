@@ -624,7 +624,22 @@ def _arabic_display(line: str) -> str:
 
 def build_subtitle_video(text: str, duration: float, out_dir: Path) -> Path:
     """Render correctly shaped Arabic text at y=320 into timed transparent PNGs."""
-    from PIL import Image, ImageDraw, ImageFont
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+    except ImportError as exc:
+        raise PipelineError(
+            "Missing Pillow. Install all dependencies with: "
+            "python -m pip install -r requirements.txt"
+        ) from exc
+
+    try:
+        import arabic_reshaper  # noqa: F401
+        from bidi.algorithm import get_display  # noqa: F401
+    except ImportError as exc:
+        raise PipelineError(
+            "Missing Arabic text dependencies. Install with: "
+            "python -m pip install -r requirements.txt"
+        ) from exc
 
     font = ImageFont.truetype(str(ensure_arabic_font()), FONT_SIZE)
     # The official Google Fonts file is variable; select its Bold instance when
