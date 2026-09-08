@@ -537,7 +537,20 @@ def generate_tts(text: str, out_path: Path, voice: str = TTS_VOICE) -> Path:
 
     async def _run():
         communicate = edge_tts.Communicate(text, voice)
-        await communicate.save(str(out_path))
+        timings = []
+        with open(out_path, "wb") as audio_file:
+            async for chunk in communicate.stream():
+                if chunk["type"] == "audio":
+                    audio_file.write(chunk["data"])
+                elif chunk["type"] == "WordBoundary":
+                    timings.append({
+                        "text": chunk.get("text", ""),
+                        "offset": chunk.get("offset", 0) / 10_000_000,
+                        "duration": chunk.get("duration", 0) / 10_000_000,
+                    })
+        out_path.with_suffix(".timings.json").write_text(
+            json.dumps(timings, ensure_ascii=False), encoding="utf-8"
+        )
 
     def _call() -> Path:
         asyncio.run(_run())
@@ -559,22 +572,38 @@ def get_media_duration(path: Path) -> float:
     return float(result.stdout.strip())
 
 
-def build_srt(text: str, duration: float, out_path: Path) -> Path:
-    """Naive proportional-timing SRT: splits text into short chunks and
-    spaces them evenly across the audio duration. Each chunk is kept as a
-    SINGLE line (small word count per chunk) so it reliably fits within the
-    subtitle safe-area at the configured font size without wrapping onto a
-    second line — a wrapped/forced two-line block is what was pushing
-    captions above the top of the frame. Good enough for short-form hook
-    videos; swap in a forced-aligner/Whisper timestamp pass for
-    frame-perfect sync."""
+def build_srt(text: str, duration: float, out_path: Path, timings_path: Path | None = None) -> Path:
+    """Build two-line RTL captions using edge-tts word-boundary timings.
+
+    This keeps each caption on screen for the exact spoken words instead of
+    dividing the total audio duration evenly, which was causing drift.
+    """
     words = text.split()
-    # Keep each cue as a compact two-line block. Eight words maximum means
-    # four words per line in the usual case, while the final short cue is
-    # split evenly so it also stays on two lines.
-    chunk_size = 8
-    word_chunks = [words[i:i + chunk_size] for i in range(0, len(words), chunk_size)] or [words]
-    per_chunk = duration / len(word_chunks)
+    timing_data = []
+    if timings_path and timings_path.exists():
+        try:
+            timing_data = json.loads(timings_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            log.warning("Could not read TTS word timings; using fallback timing: %s", exc)
+
+    timed_words = [x for x in timing_data if x.get("text")]
+    if len(timed_words) >= len(words):
+        # edge-tts normally emits one boundary per spoken token. Use the
+        # generated text order so punctuation/diacritics remain identical.
+        chunks = []
+        for i in range(0, len(words), 8):
+            end_i = min(i + 8, len(words))
+            start = float(timed_words[i].get("offset", 0))
+            if end_i < len(timed_words):
+                end = float(timed_words[end_i].get("offset", duration))
+            else:
+                end = duration
+            chunks.append((words[i:end_i], max(start, 0), min(max(end, start + 0.25), duration)))
+    else:
+        log.warning("TTS returned %d/%d word timings; using proportional fallback", len(timed_words), len(words))
+        word_chunks = [words[i:i + 8] for i in range(0, len(words), 8)] or [words]
+        per_chunk = duration / len(word_chunks)
+        chunks = [(chunk, i * per_chunk, (i + 1) * per_chunk) for i, chunk in enumerate(word_chunks)]
 
     def fmt(t: float) -> str:
         h = int(t // 3600)
@@ -584,13 +613,12 @@ def build_srt(text: str, duration: float, out_path: Path) -> Path:
         return f"{h:02}:{m:02}:{s:02},{ms:03}"
 
     lines = []
-    for i, chunk_words in enumerate(word_chunks):
-        start = i * per_chunk
-        end = (i + 1) * per_chunk
+    for i, (chunk_words, start, end) in enumerate(chunks):
         split_at = max(1, (len(chunk_words) + 1) // 2)
-        chunk_text = " ".join(chunk_words[:split_at])
+        rtl = "\u200f"
+        chunk_text = rtl + " ".join(chunk_words[:split_at])
         if len(chunk_words) > 1:
-            chunk_text += "\n" + " ".join(chunk_words[split_at:])
+            chunk_text += "\n" + rtl + " ".join(chunk_words[split_at:])
         lines.append(str(i + 1))
         lines.append(f"{fmt(start)} --> {fmt(end)}")
         lines.append(chunk_text)
@@ -634,7 +662,7 @@ def assemble_video(
         f"subtitles='{srt_filter_path}':original_size={VIDEO_W}x{VIDEO_H}:force_style="
         "'FontName=Arial,FontSize=8,Bold=1,PrimaryColour=&H00FFFFFF,"
         "OutlineColour=&H00000000,BorderStyle=1,Outline=1.5,Shadow=0,"
-        "Alignment=8,MarginV=260,MarginL=35,MarginR=35,WrapStyle=2'"
+        "Alignment=9,MarginV=260,MarginL=35,MarginR=45,WrapStyle=2'"
     )
 
     audio_inputs = ["-i", str(narration)]
@@ -967,7 +995,12 @@ def run_pipeline() -> None:
             json.dumps(topic.__dict__, ensure_ascii=False, indent=2), encoding="utf-8"
         )
 
-    srt_path = build_srt(topic.narration_script, audio_duration, run_dir / "subtitles.srt")
+    srt_path = build_srt(
+        topic.narration_script,
+        audio_duration,
+        run_dir / "subtitles.srt",
+        timings_path=narration_path.with_suffix(".timings.json"),
+    )
 
     final_video_path = assemble_video(
         bg_video_path, narration_path, srt_path, run_dir / "final.mp4", music_path=music_path,
