@@ -629,7 +629,7 @@ def host_video_on_github(video_path: Path, run_id: str) -> str:
 # ---------------------------------------------------------------------------
 
 _BUFFER_CREATE_POST_MUTATION = """
-mutation CreatePost($channelId: String!, $text: String!, $videoUrl: String!) {
+mutation CreatePost($channelId: ChannelId!, $text: String!, $videoUrl: String!) {
   createPost(
     input: {
       text: $text
