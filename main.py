@@ -668,7 +668,7 @@ mutation CreatePost($channelId: ChannelId!, $text: String!, $videoUrl: String!, 
 """
 
 _GET_CHANNEL_QUERY = """
-query GetChannel($id: String!) {
+query GetChannel($id: ChannelId!) {
   channel(input: { id: $id }) {
     id
     service
