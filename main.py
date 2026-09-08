@@ -196,6 +196,23 @@ def with_retries(fn, *args, what: str = "operation", **kwargs):
     raise PipelineError(f"{what} failed after {MAX_RETRIES} attempts: {last_err}") from last_err
 
 
+def _trim_script_to_word_limit(script: str, max_words: int) -> str:
+    """Hard safety net: if the model overshoots MAX_SCRIPT_WORDS, cut the
+    script down at the nearest sentence boundary at or before the limit
+    instead of publishing an over-length (and therefore Buffer-rejected)
+    video."""
+    words = script.split()
+    if len(words) <= max_words:
+        return script
+    truncated = " ".join(words[:max_words])
+    # Prefer cutting at the end of a full sentence if one exists reasonably
+    # close to the limit, so the narration doesn't stop mid-thought.
+    last_boundary = max(truncated.rfind("."), truncated.rfind("؟"), truncated.rfind("!"))
+    if last_boundary > len(truncated) * 0.6:
+        truncated = truncated[: last_boundary + 1]
+    return truncated.strip()
+
+
 def extract_json_block(text: str) -> dict[str, Any]:
     """Pull a JSON object out of a model response that may be wrapped in prose or fences."""
     text = text.strip()
@@ -223,8 +240,8 @@ SYSTEM_PROMPT = textwrap.dedent(
     بالمفاتيح التالية:
 
     {
-      "hook_text": "جملة أو جملتان قصيرتان وصادمتان بالعربية الفصحى المبسطة تُفتتح بها السكريبت، لا تتجاوز 30 كلمة إجمالاً",
-      "narration_script": "السكريبت الكامل الذي سيُروى بصوت التعليق ويظهر كترجمة على الفيديو. يجب أن يبدأ بنص hook_text نفسه حرفياً، ثم يكمل بشرح شيّق ومتصاعد (قصة/حقائق/تفاصيل صادمة/مقارنات) يحافظ على انتباه المشاهد حتى نهاية المقطع، وينتهي بخاتمة قوية أو سؤال تفاعلي. يجب ألا يقل إجمالي عدد الكلمات عن 340 كلمة ولا يزيد عن 420 كلمة بالعربية الفصحى المبسطة (لضمان مدة سرد صوتي تتجاوز الدقيقتين)، مقسم إلى عدة جمل قصيرة وواضحة تصلح للترجمة النصية على الشاشة",
+      "hook_text": "جملة أو جملتان قصيرتان وصادمتان بالعربية الفصحى المبسطة تُفتتح بها السكريبت، لا تتجاوز 25 كلمة إجمالاً",
+      "narration_script": "السكريبت الكامل الذي سيُروى بصوت التعليق ويظهر كترجمة على الفيديو. يجب أن يبدأ بنص hook_text نفسه حرفياً، ثم يكمل بشرح شيّق ومكثّف (أهم حقيقة أو حقيقتين صادمتين فقط، بلا حشو) وينتهي بخاتمة قوية أو سؤال تفاعلي قصير. يجب ألا يقل إجمالي عدد الكلمات عن 130 كلمة ولا يزيد عن 170 كلمة بالعربية الفصحى المبسطة (فيديو قصير جداً ومكثّف يصلح لجميع منصات النشر بما فيها Facebook Reels ذات الحد الأقصى 90 ثانية)، مقسم إلى عدة جمل قصيرة وواضحة تصلح للترجمة النصية على الشاشة",
       "title": "عنوان جذاب قصير بالعربية",
       "caption": "كابشن للمنشور بالعربية، 1-3 جمل",
       "hashtags": ["#وسم1", "#وسم2", "#وسم3", "#وسم4", "#وسم5"],
@@ -232,18 +249,23 @@ SYSTEM_PROMPT = textwrap.dedent(
     }
 
     تعليمات إلزامية بخصوص الطول (لا تتجاهلها):
-    - حقل narration_script يجب أن يحتوي على 360 كلمة عربية على الأقل (وليس أقل بأي حال)، ويفضّل أن يصل إلى 400 كلمة.
-    - هذا يعني أنك يجب أن تكتب 5-7 فقرات قصيرة على الأقل، وليس فقرة أو فقرتين فقط.
-    - إذا شعرت أنك أوشكت على الانتهاء وعدد الكلمات لم يتجاوز 360 بعد، استمر في إضافة تفاصيل/أمثلة/مقارنات/حقائق إضافية ذات صلة قبل كتابة الخاتمة.
-    - عدّ الكلمات فعلياً قبل إنهاء الإجابة، ولا تُسلّم نصاً أقصر من المطلوب.
+    - حقل narration_script يجب أن يحتوي على 130-170 كلمة عربية بالضبط تقريباً — ليس أكثر وليس أقل.
+    - الفيديو النهائي يُنشر على Facebook Reels التي تفرض حداً أقصى صارماً بـ90 ثانية، لذلك يجب أن يبقى السكريبت مختصراً ومكثفاً (فكرة واحدة قوية، بلا استطراد).
+    - عدّ الكلمات فعلياً قبل إنهاء الإجابة، ولا تُسلّم نصاً أطول أو أقصر من المطلوب.
     """
 ).strip()
 
-# edge-tts narration speaks at roughly 2.3-2.6 Arabic words/second for the
-# ar-EG-SalmaNeural voice, so ~340 words comfortably clears 2 minutes. If the
-# model under-shoots the word count anyway, retry rather than silently
-# publishing another 5-second video.
-MIN_SCRIPT_WORDS = 300
+# edge-tts narration speaks at roughly 2.0-2.4 Arabic words/second for the
+# ar-EG-SalmaNeural voice (use the conservative low end for safety margins).
+# Facebook Reels hard-caps posts at 90 seconds, so the script must stay well
+# under that: 130-170 words keeps the spoken narration in the ~55-80s range
+# even at the slower end of that rate. MAX_SCRIPT_WORDS is a hard ceiling —
+# scripts longer than this get trimmed at a sentence boundary as a safety
+# net, and MAX_AUDIO_SECONDS is a second, final safety net checked against
+# the *actual* generated audio duration before we ever try to publish.
+MIN_SCRIPT_WORDS = 110
+MAX_SCRIPT_WORDS = 190
+MAX_AUDIO_SECONDS = 85.0
 
 
 def generate_topic() -> Topic:
@@ -332,14 +354,23 @@ def generate_topic() -> Topic:
             # topic from scratch instead of shipping a too-short script.
             raise PipelineError(
                 f"narration_script too short ({word_count} words, need >= {MIN_SCRIPT_WORDS}) "
-                "— would produce a video under ~2 minutes"
+                "— would produce a video under the safe length for Facebook Reels"
             )
+
+        if word_count > MAX_SCRIPT_WORDS:
+            log.warning(
+                "narration_script too long (%d words > %d); trimming at a sentence boundary "
+                "to stay within the Facebook Reels 90s cap",
+                word_count, MAX_SCRIPT_WORDS,
+            )
+            topic.narration_script = _trim_script_to_word_limit(topic.narration_script, MAX_SCRIPT_WORDS)
+
         return topic
 
     topic = with_retries(_call, what="Groq topic generation")
     log.info(
-        "Topic generated: %s (%d-word script, ~%.0fs at 2.4 words/sec)",
-        topic.title, len(topic.narration_script.split()), len(topic.narration_script.split()) / 2.4,
+        "Topic generated: %s (%d-word script, ~%.0fs at 2.0 words/sec)",
+        topic.title, len(topic.narration_script.split()), len(topic.narration_script.split()) / 2.0,
     )
     return topic
 
@@ -807,8 +838,35 @@ def run_pipeline() -> None:
     bg_video_path = download_file(bg_video_url, run_dir / "background.mp4")
     music_path = get_bg_music(run_dir)
 
-    narration_path = generate_tts(topic.narration_script, run_dir / "narration.mp3")
-    audio_duration = get_media_duration(narration_path)
+    # Generating the narration is comparatively cheap, so if the actual
+    # spoken audio comes out longer than the Facebook Reels safety cap, retry
+    # with a fresh (hopefully shorter) topic a couple of times before giving
+    # up on this run entirely — cheaper than re-downloading footage/music.
+    max_duration_attempts = 3
+    narration_path = None
+    audio_duration = 0.0
+    for attempt in range(1, max_duration_attempts + 1):
+        narration_path = generate_tts(topic.narration_script, run_dir / "narration.mp3")
+        audio_duration = get_media_duration(narration_path)
+        log.info("Narration audio duration: %.1fs (attempt %d/%d)", audio_duration, attempt, max_duration_attempts)
+        if audio_duration <= MAX_AUDIO_SECONDS:
+            break
+        log.warning(
+            "Narration audio is %.1fs, over the %.0fs Facebook Reels safety cap — "
+            "generating a fresh, shorter topic (attempt %d/%d)",
+            audio_duration, MAX_AUDIO_SECONDS, attempt, max_duration_attempts,
+        )
+        if attempt == max_duration_attempts:
+            raise PipelineError(
+                f"Narration audio stayed over the {MAX_AUDIO_SECONDS:.0f}s safety cap after "
+                f"{max_duration_attempts} attempts — aborting this run rather than publish an "
+                "over-length video"
+            )
+        topic = generate_topic()
+        (run_dir / "topic.json").write_text(
+            json.dumps(topic.__dict__, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+
     srt_path = build_srt(topic.narration_script, audio_duration, run_dir / "subtitles.srt")
 
     final_video_path = assemble_video(
