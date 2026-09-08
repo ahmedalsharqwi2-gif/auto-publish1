@@ -240,8 +240,8 @@ SYSTEM_PROMPT = textwrap.dedent(
     بالمفاتيح التالية:
 
     {
-      "hook_text": "جملة أو جملتان قصيرتان وصادمتان بالعربية الفصحى المبسطة تُفتتح بها السكريبت، لا تتجاوز 25 كلمة إجمالاً",
-      "narration_script": "السكريبت الكامل الذي سيُروى بصوت التعليق ويظهر كترجمة على الفيديو. يجب أن يبدأ بنص hook_text نفسه حرفياً، ثم يكمل بشرح شيّق ومكثّف (أهم حقيقة أو حقيقتين صادمتين فقط، بلا حشو) وينتهي بخاتمة قوية أو سؤال تفاعلي قصير. يجب ألا يقل إجمالي عدد الكلمات عن 130 كلمة ولا يزيد عن 170 كلمة بالعربية الفصحى المبسطة (فيديو قصير جداً ومكثّف يصلح لجميع منصات النشر بما فيها Facebook Reels ذات الحد الأقصى 90 ثانية)، مقسم إلى عدة جمل قصيرة وواضحة تصلح للترجمة النصية على الشاشة",
+      "hook_text": "جملة أو جملتان قصيرتان وصادمتان بالعربية الفصحى المبسطة تُفتتح بها السكريبت، لا تتجاوز 20 كلمة إجمالاً",
+      "narration_script": "السكريبت الكامل الذي سيُروى بصوت التعليق ويظهر كترجمة على الفيديو. يجب أن يبدأ بنص hook_text نفسه حرفياً، ثم يكمل بحقيقة صادمة واحدة فقط بإيجاز شديد بلا أي حشو أو تفاصيل جانبية، وينتهي بخاتمة قصيرة جداً أو سؤال تفاعلي من كلمات قليلة. يجب ألا يقل إجمالي عدد الكلمات عن 90 كلمة ولا يزيد عن 130 كلمة بالعربية الفصحى المبسطة (فيديو قصير جداً جداً ومكثّف بشدة يصلح لجميع منصات النشر بما فيها Facebook Reels ذات الحد الأقصى 90 ثانية)، مقسم إلى جمل قصيرة جداً وواضحة تصلح للترجمة النصية على الشاشة",
       "title": "عنوان جذاب قصير بالعربية",
       "caption": "كابشن للمنشور بالعربية، 1-3 جمل",
       "hashtags": ["#وسم1", "#وسم2", "#وسم3", "#وسم4", "#وسم5"],
@@ -249,23 +249,23 @@ SYSTEM_PROMPT = textwrap.dedent(
     }
 
     تعليمات إلزامية بخصوص الطول (لا تتجاهلها):
-    - حقل narration_script يجب أن يحتوي على 130-170 كلمة عربية بالضبط تقريباً — ليس أكثر وليس أقل.
-    - الفيديو النهائي يُنشر على Facebook Reels التي تفرض حداً أقصى صارماً بـ90 ثانية، لذلك يجب أن يبقى السكريبت مختصراً ومكثفاً (فكرة واحدة قوية، بلا استطراد).
+    - حقل narration_script يجب أن يحتوي على 90-130 كلمة عربية بالضبط تقريباً — ليس أكثر وليس أقل. هذا فيديو قصير جداً (Micro-short)، وليس فيديو Shorts عادياً.
+    - الفيديو النهائي يُنشر على Facebook Reels التي تفرض حداً أقصى صارماً بـ90 ثانية فعلية للصوت المسموع، وسرعة الراوي أبطأ مما يبدو (حوالي 1.7-1.8 كلمة/ثانية فقط)، لذلك يجب الالتزام الصارم بحد 130 كلمة كسقف مطلق.
     - عدّ الكلمات فعلياً قبل إنهاء الإجابة، ولا تُسلّم نصاً أطول أو أقصر من المطلوب.
     """
 ).strip()
 
-# edge-tts narration speaks at roughly 2.0-2.4 Arabic words/second for the
-# ar-EG-SalmaNeural voice (use the conservative low end for safety margins).
-# Facebook Reels hard-caps posts at 90 seconds, so the script must stay well
-# under that: 130-170 words keeps the spoken narration in the ~55-80s range
-# even at the slower end of that rate. MAX_SCRIPT_WORDS is a hard ceiling —
-# scripts longer than this get trimmed at a sentence boundary as a safety
-# net, and MAX_AUDIO_SECONDS is a second, final safety net checked against
-# the *actual* generated audio duration before we ever try to publish.
-MIN_SCRIPT_WORDS = 110
-MAX_SCRIPT_WORDS = 190
-MAX_AUDIO_SECONDS = 85.0
+# Measured from real production runs: ar-EG-SalmaNeural speaks Arabic at
+# roughly 1.7-1.8 words/second — much slower than a naive estimate would
+# suggest. Facebook Reels hard-caps posts at 90 seconds, so the script must
+# stay well under that: 90-130 words keeps spoken narration in the ~55-75s
+# range even at the slower end of the measured rate. MAX_SCRIPT_WORDS is a
+# hard ceiling — scripts longer than this get trimmed at a sentence boundary
+# as a safety net, and MAX_AUDIO_SECONDS is a second, final safety net
+# checked against the *actual* generated audio duration before publishing.
+MIN_SCRIPT_WORDS = 80
+MAX_SCRIPT_WORDS = 135
+MAX_AUDIO_SECONDS = 82.0
 
 
 def generate_topic() -> Topic:
@@ -314,8 +314,8 @@ def generate_topic() -> Topic:
     def _call() -> Topic:
         user_msg = (
             "أعطني فكرة فيديو اليوم بصيغة JSON كما هو محدد. "
-            "تذكير مهم: narration_script يجب ألا يقل عن 360 كلمة عربية — "
-            "هذا الشرط أهم من أي شرط آخر في الطلب، وسيتم رفض أي إجابة أقصر."
+            "تذكير مهم: narration_script يجب أن يكون بين 90 و130 كلمة عربية بالضبط — "
+            "هذا الشرط أهم من أي شرط آخر في الطلب، وسيتم رفض أي إجابة أطول أو أقصر."
         )
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
@@ -341,8 +341,8 @@ def generate_topic() -> Topic:
                 "content": (
                     f"السكريبت الذي كتبته يحتوي على {word_count} كلمة فقط، وهذا أقل من المطلوب. "
                     f"أعد كتابة نفس كائن JSON بالكامل، مع الإبقاء على hook_text كما هو حرفياً، "
-                    f"لكن وسّع narration_script بإضافة تفاصيل/أمثلة/مقارنات/حقائق إضافية ذات صلة "
-                    f"حتى يصل إلى 380-420 كلمة على الأقل. أجب حصراً بكائن JSON صالح."
+                    f"لكن وسّع narration_script قليلاً بإضافة تفصيلة واحدة إضافية بسيطة "
+                    f"حتى يصل إلى 100-130 كلمة. أجب حصراً بكائن JSON صالح."
                 ),
             })
             raw_text = _groq_chat(messages)
@@ -369,8 +369,8 @@ def generate_topic() -> Topic:
 
     topic = with_retries(_call, what="Groq topic generation")
     log.info(
-        "Topic generated: %s (%d-word script, ~%.0fs at 2.0 words/sec)",
-        topic.title, len(topic.narration_script.split()), len(topic.narration_script.split()) / 2.0,
+        "Topic generated: %s (%d-word script, ~%.0fs at 1.75 words/sec)",
+        topic.title, len(topic.narration_script.split()), len(topic.narration_script.split()) / 1.75,
     )
     return topic
 
