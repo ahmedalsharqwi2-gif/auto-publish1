@@ -245,8 +245,8 @@ SYSTEM_PROMPT = textwrap.dedent(
     بالمفاتيح التالية:
 
     {
-      "hook_text": "جملة أو جملتان قصيرتان وصادمتان بالعربية الفصحى المبسطة تُفتتح بها السكريبت، لا تتجاوز 20 كلمة إجمالاً",
-      "narration_script": "السكريبت الكامل الذي سيُروى بصوت التعليق ويظهر كترجمة على الفيديو. يجب أن يبدأ بنص hook_text نفسه حرفياً، ثم يكمل بحقيقة صادمة واحدة فقط بإيجاز شديد بلا أي حشو أو تفاصيل جانبية، وينتهي بخاتمة قصيرة جداً أو سؤال تفاعلي من كلمات قليلة. يجب ألا يقل إجمالي عدد الكلمات عن 90 كلمة ولا يزيد عن 130 كلمة بالعربية الفصحى المبسطة (فيديو قصير جداً جداً ومكثّف بشدة يصلح لجميع منصات النشر بما فيها Facebook Reels ذات الحد الأقصى 90 ثانية)، مقسم إلى جمل قصيرة جداً وواضحة تصلح للترجمة النصية على الشاشة",
+      "hook_text": "جملة أو جملتان قصيرتان وصادمتان بالعربية الفصحى المبسطة تُفتتح بها السكريبت، لا تتجاوز 20 كلمة إجمالاً، ويجب أن تكون مُشكّلة بالكامل (تشكيل كامل لكل حرف: فتحة/ضمة/كسرة/سكون/شدة/تنوين)",
+      "narration_script": "السكريبت الكامل الذي سيُروى بصوت التعليق ويظهر كترجمة على الفيديو. يجب أن يبدأ بنص hook_text نفسه حرفياً (بنفس التشكيل)، ثم يكمل بحقيقة صادمة واحدة فقط بإيجاز شديد بلا أي حشو أو تفاصيل جانبية، وينتهي بخاتمة قصيرة جداً أو سؤال تفاعلي من كلمات قليلة. يجب ألا يقل إجمالي عدد الكلمات عن 90 كلمة ولا يزيد عن 130 كلمة بالعربية الفصحى المبسطة (فيديو قصير جداً جداً ومكثّف بشدة يصلح لجميع منصات النشر بما فيها Facebook Reels ذات الحد الأقصى 90 ثانية)، مقسم إلى جمل قصيرة جداً وواضحة تصلح للترجمة النصية على الشاشة. يجب أن يكون النص بأكمله مُشكّلاً تشكيلاً كاملاً وصحيحاً نحوياً (كل كلمة، وليس فقط أواخر الكلمات) حتى ينطقه محرك تحويل النص إلى كلام بشكل صحيح ومفهوم",
       "title": "عنوان جذاب قصير بالعربية",
       "caption": "كابشن للمنشور بالعربية، 1-3 جمل",
       "hashtags": ["#وسم1", "#وسم2", "#وسم3", "#وسم4", "#وسم5"],
@@ -257,6 +257,11 @@ SYSTEM_PROMPT = textwrap.dedent(
     - حقل narration_script يجب أن يحتوي على 90-130 كلمة عربية بالضبط تقريباً — ليس أكثر وليس أقل. هذا فيديو قصير جداً (Micro-short)، وليس فيديو Shorts عادياً.
     - الفيديو النهائي يُنشر على Facebook Reels التي تفرض حداً أقصى صارماً بـ90 ثانية فعلية للصوت المسموع، وسرعة الراوي أبطأ مما يبدو (حوالي 1.7-1.8 كلمة/ثانية فقط)، لذلك يجب الالتزام الصارم بحد 130 كلمة كسقف مطلق.
     - عدّ الكلمات فعلياً قبل إنهاء الإجابة، ولا تُسلّم نصاً أطول أو أقصر من المطلوب.
+
+    تعليمات إلزامية بخصوص التشكيل (لا تتجاهلها):
+    - كل من hook_text وnarration_script يجب أن يكونا مُشكّلين تشكيلاً كاملاً (Full Arabic Diacritics/Tashkeel) على كل حرف تقريباً في كل كلمة، وليس فقط الحركة الإعرابية الأخيرة، وذلك حتى تنطقهما محركات تحويل النص إلى كلام (TTS) بنطق صحيح وواضح.
+    - استخدم الحركات القياسية (فتحة، ضمة، كسرة، سكون، شدة، تنوين بالفتح/الضم/الكسر) بدقة نحوية سليمة.
+    - لا تترك أي كلمة بدون تشكيل، حتى الكلمات القصيرة والحروف مثل (مِنْ، فِي، عَلَى، وَ، لَا).
     """
 ).strip()
 
@@ -435,18 +440,38 @@ def download_file(url: str, dest: Path) -> Path:
 def get_bg_music(dest_dir: Path) -> Path | None:
     """Best-effort background-music selection. Never raises — a music
     problem should never fail the whole pipeline; it just publishes without
-    music. Local files in music/ are tried first (no network call, so
-    nothing to 404), then BG_MUSIC_URL, then silence."""
-    if MUSIC_DIR.is_dir():
-        local_tracks = sorted(
-            p for p in MUSIC_DIR.iterdir()
-            if p.is_file() and p.suffix.lower() in (".mp3", ".m4a", ".wav", ".aac")
-        )
-        if local_tracks:
-            chosen = random.choice(local_tracks)
-            log.info("Background music: %s (from music/)", chosen.name)
-            return chosen
-        log.info("music/ folder exists but has no audio files in it")
+    music. Local files committed into the repo are tried first (no network
+    call, so nothing to 404), then BG_MUSIC_URL, then silence.
+
+    Checks several common folder names/locations (case-insensitive) and
+    searches them recursively, since a single hardcoded "music/" folder at
+    the repo root is a common source of silent misses if the folder was
+    committed with a different name/casing or nested a level deep. Every
+    candidate path checked is logged so a run with no music shows exactly
+    where it looked."""
+    repo_root = Path(__file__).resolve().parent
+    candidate_dirs = []
+    seen = set()
+    for name in ("music", "Music", "assets/music", "assets/Music", "audio", "bg_music"):
+        d = (repo_root / name).resolve()
+        if d not in seen:
+            seen.add(d)
+            candidate_dirs.append(d)
+
+    audio_exts = (".mp3", ".m4a", ".wav", ".aac")
+    all_found: list[Path] = []
+    for d in candidate_dirs:
+        if not d.is_dir():
+            log.info("Background music: no folder at %s", d)
+            continue
+        found = sorted(p for p in d.rglob("*") if p.is_file() and p.suffix.lower() in audio_exts)
+        log.info("Background music: checked %s — %d audio file(s) found", d, len(found))
+        all_found.extend(found)
+
+    if all_found:
+        chosen = random.choice(all_found)
+        log.info("Background music: using %s", chosen)
+        return chosen
 
     if BG_MUSIC_URL:
         candidates = [u.strip() for u in BG_MUSIC_URL.split(",") if u.strip()]
@@ -461,7 +486,12 @@ def get_bg_music(dest_dir: Path) -> Path | None:
                 log.warning("Could not fetch BG_MUSIC_URL track — publishing without music: %s", exc)
                 return None
 
-    log.info("No background music configured (add .mp3 files to a music/ folder, or set BG_MUSIC_URL) — publishing without music")
+    log.info(
+        "No background music configured — checked %s (recursively) for "
+        "%s files, and BG_MUSIC_URL is unset. Add audio files to one of "
+        "those folders (committed to the repo) or set BG_MUSIC_URL.",
+        ", ".join(str(d) for d in candidate_dirs), "/".join(audio_exts),
+    )
     return None
 
 
@@ -555,20 +585,21 @@ def assemble_video(
         # default script resolution of 384x288 and scales/positions the text
         # for that instead of the actual 1080x1920 frame.
         #
-        # Style: Alignment=2 anchors text to the BOTTOM-center of the frame,
-        # with MarginV as the distance up from the bottom edge — kept modest
-        # (150px on a 1920px-tall frame, ~8%) so the caption sits solidly in
-        # the lower area just above the platform UI bar, never near the top.
-        # BorderStyle=1 (outline+shadow only, no BorderStyle=3 box) plus a
-        # moderate Outline=2 keeps the white text clean and readable
-        # directly on the video without the thick, blobby border or black
-        # background box from before. FontSize=20 + MarginL/MarginR=80 give
-        # each (max 3-word) chunk from build_srt() enough width headroom to
-        # render as a single line without libass auto-wrapping it.
+        # Style: Alignment=8 anchors text to the TOP-center of the frame,
+        # with MarginV as the distance down from the top edge — kept small
+        # enough (90px on a 1920px-tall frame) to sit right under the
+        # phone status bar / app icons that platforms overlay at the very
+        # top, without being cut off. FontSize dropped hard (14, from 20)
+        # so a 3-word chunk reads comfortably small on an actual mobile
+        # screen instead of dominating it. BorderStyle=1 (outline+shadow
+        # only) plus a light Outline=1.5 keeps the white text crisp and
+        # readable without a thick blobby border. MarginL/MarginR give
+        # each chunk plenty of width headroom so libass never auto-wraps
+        # it onto a second line.
         f"subtitles='{srt_filter_path}':original_size={VIDEO_W}x{VIDEO_H}:force_style="
-        "'FontName=Arial,FontSize=20,Bold=1,PrimaryColour=&H00FFFFFF,"
-        "OutlineColour=&H00000000,BorderStyle=1,Outline=2,Shadow=0,"
-        "Alignment=2,MarginV=150,MarginL=80,MarginR=80,WrapStyle=1'"
+        "'FontName=Arial,FontSize=14,Bold=1,PrimaryColour=&H00FFFFFF,"
+        "OutlineColour=&H00000000,BorderStyle=1,Outline=1.5,Shadow=0,"
+        "Alignment=8,MarginV=90,MarginL=100,MarginR=100,WrapStyle=1'"
     )
 
     audio_inputs = ["-i", str(narration)]
