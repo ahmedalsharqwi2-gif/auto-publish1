@@ -292,15 +292,18 @@ MAX_AUDIO_SECONDS = 82.0
 def generate_topic() -> Topic:
     log.info("Generating viral topic via Groq (%s)...", GROQ_MODEL)
 
-    def _groq_chat(messages: list[dict[str, str]]) -> str:
+    def _groq_chat(messages: list[dict[str, str]], strict_json: bool = True) -> str:
         payload = {
             "model": GROQ_MODEL,
             "messages": messages,
-            "response_format": {"type": "json_object"},
-            "max_completion_tokens": 1536,
+            # GPT-OSS may spend completion tokens on hidden reasoning before
+            # emitting JSON. 1536 was too small for a 90-130 word Arabic script.
+            "max_completion_tokens": 4096,
             "reasoning_effort": "low",
             "temperature": 0.9,
         }
+        if strict_json:
+            payload["response_format"] = {"type": "json_object"}
         resp = requests.post(
             GROQ_ENDPOINT,
             headers={
@@ -311,7 +314,14 @@ def generate_topic() -> Topic:
             timeout=60,
         )
         if resp.status_code != 200:
-            raise PipelineError(f"Groq API error {resp.status_code}: {resp.text[:500]}")
+            # Some Groq/model combinations reject strict JSON mode even though
+            # they can return a valid JSON object in ordinary text mode.
+            # Retry once without response_format; extract_json_block() below
+            # already handles markdown fences and surrounding prose.
+            if strict_json and resp.status_code == 400 and "json_validate_failed" in resp.text:
+                log.warning("Groq strict JSON mode failed; retrying in text mode")
+                return _groq_chat(messages, strict_json=False)
+            raise PipelineError(f"Groq API error {resp.status_code}: {resp.text[:800]}")
         data = resp.json()
         raw_text = data.get("choices", [{}])[0].get("message", {}).get("content", "")
         if not raw_text:
