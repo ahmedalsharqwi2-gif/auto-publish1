@@ -499,14 +499,18 @@ def get_media_duration(path: Path) -> float:
 
 def build_srt(text: str, duration: float, out_path: Path) -> Path:
     """Naive proportional-timing SRT: splits text into short chunks and
-    spaces them evenly across the audio duration. Each chunk is manually
-    broken into two roughly-even lines (rather than left to the renderer's
-    auto-wrap) so captions come out as tidy, consistent two-line blocks
-    instead of crowding unpredictably. Good enough for short-form hook
+    spaces them evenly across the audio duration. Each chunk is kept as a
+    SINGLE line (small word count per chunk) so it reliably fits within the
+    subtitle safe-area at the configured font size without wrapping onto a
+    second line — a wrapped/forced two-line block is what was pushing
+    captions above the top of the frame. Good enough for short-form hook
     videos; swap in a forced-aligner/Whisper timestamp pass for
     frame-perfect sync."""
     words = text.split()
-    chunk_size = 4
+    # Kept small (3 words) so a single line comfortably fits inside
+    # MarginL/MarginR at the configured FontSize, even for wider Arabic
+    # glyphs, without libass auto-wrapping it onto a second line.
+    chunk_size = 3
     word_chunks = [words[i:i + chunk_size] for i in range(0, len(words), chunk_size)] or [words]
     per_chunk = duration / len(word_chunks)
 
@@ -521,13 +525,7 @@ def build_srt(text: str, duration: float, out_path: Path) -> Path:
     for i, chunk_words in enumerate(word_chunks):
         start = i * per_chunk
         end = (i + 1) * per_chunk
-        mid = (len(chunk_words) + 1) // 2
-        first_line = " ".join(chunk_words[:mid])
-        second_line = " ".join(chunk_words[mid:])
-        # \N is a hard line break both SRT and libass/ffmpeg understand —
-        # this is what makes the two lines land exactly where intended
-        # instead of the renderer auto-wrapping mid-word unpredictably.
-        chunk_text = f"{first_line}\\N{second_line}" if second_line else first_line
+        chunk_text = " ".join(chunk_words)
         lines.append(str(i + 1))
         lines.append(f"{fmt(start)} --> {fmt(end)}")
         lines.append(chunk_text)
@@ -558,18 +556,19 @@ def assemble_video(
         # for that instead of the actual 1080x1920 frame.
         #
         # Style: Alignment=2 anchors text to the BOTTOM-center of the frame,
-        # with MarginV as the distance up from the bottom edge — high enough
-        # to clear the caption/username bar most platforms overlay at the
-        # very bottom, but still solidly in the lower third, not the middle.
+        # with MarginV as the distance up from the bottom edge — kept modest
+        # (150px on a 1920px-tall frame, ~8%) so the caption sits solidly in
+        # the lower area just above the platform UI bar, never near the top.
         # BorderStyle=1 (outline+shadow only, no BorderStyle=3 box) plus a
         # moderate Outline=2 keeps the white text clean and readable
         # directly on the video without the thick, blobby border or black
-        # background box from before. MarginL/MarginR keep lines from
-        # stretching edge-to-edge.
+        # background box from before. FontSize=20 + MarginL/MarginR=80 give
+        # each (max 3-word) chunk from build_srt() enough width headroom to
+        # render as a single line without libass auto-wrapping it.
         f"subtitles='{srt_filter_path}':original_size={VIDEO_W}x{VIDEO_H}:force_style="
-        "'FontName=Arial,FontSize=22,Bold=1,PrimaryColour=&H00FFFFFF,"
+        "'FontName=Arial,FontSize=20,Bold=1,PrimaryColour=&H00FFFFFF,"
         "OutlineColour=&H00000000,BorderStyle=1,Outline=2,Shadow=0,"
-        "Alignment=2,MarginV=260,MarginL=70,MarginR=70'"
+        "Alignment=2,MarginV=150,MarginL=80,MarginR=80,WrapStyle=1'"
     )
 
     audio_inputs = ["-i", str(narration)]
