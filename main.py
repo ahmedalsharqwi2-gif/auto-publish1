@@ -37,17 +37,7 @@ Optional environment variables:
     WORK_DIR             scratch directory (default: ./work)
     LOG_LEVEL            default: INFO
     BG_MUSIC_URL         direct MP3/audio URL(s), comma-separated, for background
-                          music.
-    GH_MUSIC_RAW_URLS    raw.githubusercontent.com direct audio URL(s), comma-
-                          separated, tried after BG_MUSIC_URL.
-    BG_MUSIC_VOLUME      background-music mix level, 0-1 (default: 0.15)
-    AMBIENT_MUSIC_SECONDS length in seconds of the synthesized ambient
-                          fallback track (default: 90)
-
-    Music resolution order: local files in music/ -> BG_MUSIC_URL ->
-    GH_MUSIC_RAW_URLS -> a programmatically synthesized ambient pad
-    (numpy + wave, no external source, so it always succeeds and carries
-    zero copyright risk).
+                          music. Falls back to bundled CC-BY tracks if unset.
 """
 
 from __future__ import annotations
@@ -149,48 +139,24 @@ RETRY_BACKOFF_SECONDS = 5
 # 404'd on every run. Local files are the reliable fix: no network fetch at
 # all, so there's nothing to go stale or get blocked later.
 #
-# Music is resolved in this order (see get_bg_music()), each one a fallback
-# for the last so a run never fails just because music is unavailable:
-#   1. Local files committed into a "music/" folder at the repo root (next
-#      to main.py — actions/checkout brings it along automatically). One is
-#      picked at random each run. Good, verified no-attribution-required
-#      sources: Mixkit (mixkit.co/free-stock-music) or Pixabay
-#      (pixabay.com/music) — download the file in your browser, commit it
-#      into music/.
-#   2. BG_MUSIC_URL (a GitHub Secret or plain env var, comma-separated for
-#      several options) if you'd rather host your own track elsewhere.
-#   3. GH_MUSIC_RAW_URLS below — plain "raw.githubusercontent.com" links to
-#      small, explicitly royalty-free/public-domain audio files. GitHub Raw
-#      requires no API key and no auth, so it needs nothing beyond network
-#      access. NOTE: replace the placeholder URLs below with links you've
-#      personally verified point at a royalty-free track you're allowed to
-#      use — a raw.githubusercontent.com URL only guarantees the *file
-#      host*, not the *license* of whatever ends up committed there.
-#   4. If every option above is unavailable (no local files, no URL
-#      reachable), the pipeline SYNTHESIZES a short ambient pad
-#      programmatically with numpy + Python's built-in `wave` module (see
-#      generate_ambient_music()). This is generated audio with no external
-#      source material at all, so there is zero copyright risk — it's the
-#      guaranteed last-resort fallback that keeps the pipeline from ever
-#      publishing silently just because no track was reachable.
+# Drop your own royalty-free .mp3 files into a "music/" folder at the repo
+# root (next to main.py — actions/checkout brings it along automatically).
+# One is picked at random each run, so adding a handful of tracks gives you
+# variety for free. Good, verified no-attribution-required sources: Mixkit
+# (mixkit.co/free-stock-music) or Pixabay (pixabay.com/music) — download the
+# file in your browser, commit it into music/.
+#
+# BG_MUSIC_URL (a GitHub Secret or plain env var, comma-separated for
+# several options) is still supported as a fallback if you'd rather host
+# your track elsewhere. If neither is available, the pipeline simply
+# publishes without music instead of failing the run.
 BG_MUSIC_URL = _clean_env("BG_MUSIC_URL")
 MUSIC_DIR = Path(__file__).resolve().parent / "music"
-
-# Small, direct raw.githubusercontent.com links to royalty-free audio files.
-# Replace these with your own verified links (or leave the list empty to
-# skip straight to BG_MUSIC_URL / the synthesized-ambient fallback).
-GH_MUSIC_RAW_URLS: list[str] = [
-    u.strip() for u in os.getenv("GH_MUSIC_RAW_URLS", "").split(",") if u.strip()
-]
-
-# Background-music volume in the final mix, as a fraction of full scale.
-# Kept low so it sits under the narration rather than competing with it.
-BG_MUSIC_VOLUME = float(os.getenv("BG_MUSIC_VOLUME", "0.15"))
-
-# How long (seconds) to synthesize for the programmatic ambient fallback.
-# Longer than MAX_AUDIO_SECONDS so assemble_video's atrim always has enough
-# to cut down to the narration's actual length without needing to loop.
-AMBIENT_MUSIC_SECONDS = 90.0
+# Verified public repository track used only when no local track or user URL is
+# configured. If GitHub is unreachable, generate_ambient_music() is used.
+DEFAULT_BG_MUSIC_URL = (
+    "https://raw.githubusercontent.com/effacestudios/Royalty-Free-Music-Pack/master/Bubbles.mp3"
+)
 
 REQUIRED_ENV = {
     "GROQ_API_KEY": GROQ_API_KEY,
@@ -476,82 +442,42 @@ def download_file(url: str, dest: Path) -> Path:
     return with_retries(_call, what=f"download {url}")
 
 
-def generate_ambient_music(duration: float, out_path: Path, sample_rate: int = 44100) -> Path:
-    """Synthesize a short, quiet ambient pad entirely programmatically with
-    numpy + Python's built-in `wave` module — no downloaded/sampled audio at
-    all, so there is zero copyright risk. This is the guaranteed last-resort
-    fallback: it needs no network access and no external files, so it can
-    never 404, go missing, or carry a license question.
-
-    Layers a handful of slowly-detuned sine tones (a soft, static "pad"
-    chord) under a slow LFO amplitude wobble so it doesn't sound like a dead
-    flat tone, with a couple-second fade in/out. assemble_video() takes care
-    of looping/trimming this (or any other music source) to the exact final
-    video length, so this only needs to render AMBIENT_MUSIC_SECONDS once.
-    """
-    import numpy as np
-    import wave
-
-    duration = max(duration, 1.0)
-    n_samples = int(sample_rate * duration)
-    t = np.linspace(0, duration, n_samples, endpoint=False)
-
-    # A simple, consonant low pad chord (Cmaj9-ish, low register) — quiet
-    # and static enough to sit under narration without drawing attention.
-    freqs = [130.81, 164.81, 196.00, 246.94]  # C3, E3, G3, B3
-    signal = np.zeros(n_samples)
-    for i, f in enumerate(freqs):
-        # Tiny per-voice phase offset so the layered sines don't sum into a
-        # single harsh tone.
-        signal += np.sin(2 * np.pi * f * t + i * 0.35)
-    signal /= len(freqs)
-
-    # Slow ("breathing") amplitude LFO so the pad isn't perfectly static.
-    lfo = 0.6 + 0.4 * np.sin(2 * np.pi * 0.05 * t)
-    signal *= lfo
-
-    # Fade in/out so looping/trimming never produces a hard click.
-    fade_len = int(min(2.0, duration / 4) * sample_rate)
-    if fade_len > 0:
-        fade_curve = np.linspace(0.0, 1.0, fade_len)
-        signal[:fade_len] *= fade_curve
-        signal[-fade_len:] *= fade_curve[::-1]
-
-    # Normalize with headroom (the final mix ducks this further via
-    # BG_MUSIC_VOLUME/afade in assemble_video, so this just avoids clipping
-    # in the intermediate WAV file itself).
-    peak = np.max(np.abs(signal))
-    if peak > 0:
-        signal = signal / peak * 0.5
-
-    pcm = (signal * 32767).astype(np.int16)
-    stereo = np.column_stack([pcm, pcm])  # cheap mono-doubled stereo
-
-    with wave.open(str(out_path), "w") as wf:
-        wf.setnchannels(2)
-        wf.setsampwidth(2)
-        wf.setframerate(sample_rate)
-        wf.writeframes(stereo.tobytes())
-
-    return out_path
+def generate_ambient_music(dest: Path, duration: float = 90.0) -> Path | None:
+    """Create a quiet, license-free ambient pad with FFmpeg as an offline fallback."""
+    try:
+        cmd = [
+            "ffmpeg", "-y", "-v", "error",
+            "-f", "lavfi", "-i",
+            "sine=frequency=110:sample_rate=44100:duration=" + str(duration),
+            "-f", "lavfi", "-i",
+            "sine=frequency=164.81:sample_rate=44100:duration=" + str(duration),
+            "-filter_complex",
+            "[0:a]volume=0.10,afade=t=in:st=0:d=4,afade=t=out:st=86:d=4[a];"
+            "[1:a]volume=0.055,afade=t=in:st=0:d=4,afade=t=out:st=86:d=4[b];"
+            "[a][b]amix=inputs=2:normalize=0,lowpass=f=900,volume=0.8[out]",
+            "-map", "[out]", "-c:a", "libmp3lame", "-b:a", "96k", str(dest),
+        ]
+        subprocess.run(cmd, check=True, capture_output=True, text=True)
+        if dest.exists() and dest.stat().st_size > 0:
+            log.info("Background music: generated offline ambient pad at %s", dest)
+            return dest
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Could not generate offline ambient music: %s", exc)
+    return None
 
 
-def get_bg_music(dest_dir: Path) -> Path:
-    """Background-music selection with layered fallbacks, in order:
-    1. Local files committed into the repo (no network call at all).
-    2. BG_MUSIC_URL, if set.
-    3. GH_MUSIC_RAW_URLS (raw.githubusercontent.com direct links).
-    4. A programmatically synthesized ambient pad (generate_ambient_music) —
-       this step cannot fail (no network, no external files), so this
-       function always returns a usable path and the pipeline never
-       publishes without music just because a track was unreachable.
+def get_bg_music(dest_dir: Path) -> Path | None:
+    """Best-effort background-music selection. Never raises — a music
+    problem should never fail the whole pipeline; it just publishes without
+    music. Local files committed into the repo are tried first (no network
+    call, so nothing to 404), then BG_MUSIC_URL, then silence.
 
     Checks several common folder names/locations (case-insensitive) and
     searches them recursively, since a single hardcoded "music/" folder at
     the repo root is a common source of silent misses if the folder was
     committed with a different name/casing or nested a level deep. Every
-    candidate path checked is logged so a run shows exactly where it
-    looked."""
+    candidate path checked is logged so a run with no music shows exactly
+    where it looked."""
     repo_root = Path(__file__).resolve().parent
     candidate_dirs = []
     seen = set()
@@ -573,42 +499,30 @@ def get_bg_music(dest_dir: Path) -> Path:
 
     if all_found:
         chosen = random.choice(all_found)
-        log.info("Background music: using local file %s", chosen)
+        log.info("Background music: using %s", chosen)
         return chosen
 
-    # 2. BG_MUSIC_URL (your own hosted track)
-    if BG_MUSIC_URL:
-        candidates = [u.strip() for u in BG_MUSIC_URL.split(",") if u.strip()]
-        if candidates:
-            url = random.choice(candidates)
-            dest = dest_dir / "music.mp3"
-            try:
-                download_file(url, dest)
-                log.info("Background music: using BG_MUSIC_URL track %s", url)
-                return dest
-            except Exception as exc:  # noqa: BLE001
-                log.warning("Could not fetch BG_MUSIC_URL track (%s): %s", url, exc)
-
-    # 3. GH_MUSIC_RAW_URLS (raw.githubusercontent.com direct links)
-    if GH_MUSIC_RAW_URLS:
-        url = random.choice(GH_MUSIC_RAW_URLS)
+    candidates = [u.strip() for u in (BG_MUSIC_URL or DEFAULT_BG_MUSIC_URL).split(",") if u.strip()]
+    if candidates:
+        url = random.choice(candidates)
         dest = dest_dir / "music.mp3"
         try:
             download_file(url, dest)
-            log.info("Background music: using GitHub Raw track %s", url)
+            log.info("Background music: %s", url)
             return dest
         except Exception as exc:  # noqa: BLE001
-            log.warning("Could not fetch GH_MUSIC_RAW_URLS track (%s): %s", url, exc)
+            log.warning("Could not fetch background music — trying offline fallback: %s", exc)
 
-    # 4. Guaranteed fallback: synthesize a royalty-free ambient pad locally.
+    generated = generate_ambient_music(dest_dir / "ambient_pad.mp3")
+    if generated:
+        return generated
+
     log.info(
-        "No usable music found — checked %s (recursively), BG_MUSIC_URL, "
-        "and GH_MUSIC_RAW_URLS. Falling back to a programmatically "
-        "synthesized ambient track (no copyright risk, no network needed).",
-        ", ".join(str(d) for d in candidate_dirs),
+        "No background music available after local, GitHub, and offline fallback — "
+        "checked %s (recursively) for %s files.",
+        ", ".join(str(d) for d in candidate_dirs), "/".join(audio_exts),
     )
-    dest = dest_dir / "ambient_music.wav"
-    return generate_ambient_music(AMBIENT_MUSIC_SECONDS, dest)
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -653,10 +567,9 @@ def build_srt(text: str, duration: float, out_path: Path) -> Path:
     videos; swap in a forced-aligner/Whisper timestamp pass for
     frame-perfect sync."""
     words = text.split()
-    # Kept small (3 words) so a single line comfortably fits inside
-    # MarginL/MarginR at the configured FontSize, even for wider Arabic
-    # glyphs, without libass auto-wrapping it onto a second line.
-    chunk_size = 3
+    # Keep every cue on exactly one subtitle line, with at least four words.
+    # A tiny font and wide margins prevent libass from wrapping the cue.
+    chunk_size = 6
     word_chunks = [words[i:i + chunk_size] for i in range(0, len(words), chunk_size)] or [words]
     per_chunk = duration / len(word_chunks)
 
@@ -701,26 +614,21 @@ def assemble_video(
         # default script resolution of 384x288 and scales/positions the text
         # for that instead of the actual 1080x1920 frame.
         #
-        # Style: Alignment=8 anchors text to the TOP-center of the frame —
-        # libass horizontally centers each line within MarginL/MarginR on
-        # its own (equivalent to X = (width - text_width) / 2), so no
-        # manual X math is needed. MarginV is the distance DOWN from the
-        # top edge; set to 300px per the requested "top safe zone" landing
-        # spot (clear of status-bar/profile-icon overlays that platforms
-        # draw over the very top of Shorts/Reels). Text is split into
-        # 3-word chunks upstream in build_srt() so each line stays short
-        # and never auto-wraps. PrimaryColour=white text with a thick
-        # Outline=5 (5px) OutlineColour=black gives a bold black border
-        # around white text, readable over any background footage.
-        # BorderStyle=1 keeps it an outline (not a background box).
-        # FontSize bumped 14 -> 20 alongside the thicker outline: a 5px
-        # border on top of a tiny 14px glyph would swallow the letterforms
-        # entirely, so the font is sized up to stay legible with that
-        # border weight.
+        # Style: Alignment=8 anchors text to the TOP-center of the frame,
+        # with MarginV as the distance down from the top edge — kept small
+        # enough (90px on a 1920px-tall frame) to sit right under the
+        # phone status bar / app icons that platforms overlay at the very
+        # top safe zone, 300px below the frame edge. FontSize is intentionally
+        # tiny so a 6-word chunk stays on one line on an actual mobile
+        # screen instead of dominating it. BorderStyle=1 (outline+shadow
+        # only) plus a light Outline=1.5 keeps the white text crisp and
+        # readable without a thick blobby border. MarginL/MarginR give
+        # each chunk plenty of width headroom so libass never auto-wraps
+        # it onto a second line.
         f"subtitles='{srt_filter_path}':original_size={VIDEO_W}x{VIDEO_H}:force_style="
-        "'FontName=Arial,FontSize=20,Bold=1,PrimaryColour=&H00FFFFFF,"
-        "OutlineColour=&H00000000,BorderStyle=1,Outline=5,Shadow=0,"
-        "Alignment=8,MarginV=300,MarginL=100,MarginR=100,WrapStyle=1'"
+        "'FontName=Arial,FontSize=12,Bold=1,PrimaryColour=&H00FFFFFF,"
+        "OutlineColour=&H00000000,BorderStyle=1,Outline=1.5,Shadow=0,"
+        "Alignment=8,MarginV=300,MarginL=35,MarginR=35,WrapStyle=2'"
     )
 
     audio_inputs = ["-i", str(narration)]
@@ -734,7 +642,7 @@ def assemble_video(
         filter_complex = (
             f"[2:a]aloop=loop=-1:size=2e9,atrim=0:{audio_duration:.2f},"
             f"afade=t=in:st=0:d=1.5,afade=t=out:st={max(audio_duration - 1.5, 0):.2f}:d=1.5,"
-            f"volume={BG_MUSIC_VOLUME}[music];"
+            f"volume=0.15[music];"
             f"[1:a][music]amix=inputs=2:duration=first:dropout_transition=2:normalize=0[aout]"
         )
         cmd = [
