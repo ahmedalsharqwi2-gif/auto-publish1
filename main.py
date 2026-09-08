@@ -134,19 +134,24 @@ MAX_RETRIES = 3
 RETRY_BACKOFF_SECONDS = 5
 
 # --- Background music -----------------------------------------------------
-# Optional: set BG_MUSIC_URL (a GitHub Secret or plain env var) to a direct,
-# publicly-downloadable audio file URL to always use your own track. You can
-# pass several URLs separated by commas and one will be picked at random each
-# run. If it's unset, the pipeline falls back to the small set of stable,
-# long-standing Kevin MacLeod / incompetech.com tracks below (CC BY 4.0 —
-# free to use, attribution required. If you'd rather not deal with
-# attribution, set BG_MUSIC_URL to a CC0 track of your own instead).
+# incompetech.com's old direct-download URLs (used previously) have gone
+# dead — the site now serves its player via JavaScript, so those links
+# 404'd on every run. Local files are the reliable fix: no network fetch at
+# all, so there's nothing to go stale or get blocked later.
+#
+# Drop your own royalty-free .mp3 files into a "music/" folder at the repo
+# root (next to main.py — actions/checkout brings it along automatically).
+# One is picked at random each run, so adding a handful of tracks gives you
+# variety for free. Good, verified no-attribution-required sources: Mixkit
+# (mixkit.co/free-stock-music) or Pixabay (pixabay.com/music) — download the
+# file in your browser, commit it into music/.
+#
+# BG_MUSIC_URL (a GitHub Secret or plain env var, comma-separated for
+# several options) is still supported as a fallback if you'd rather host
+# your track elsewhere. If neither is available, the pipeline simply
+# publishes without music instead of failing the run.
 BG_MUSIC_URL = _clean_env("BG_MUSIC_URL")
-DEFAULT_BG_MUSIC_TRACKS = [
-    ("https://incompetech.com/music/royalty-free/mp3-royaltyfree/Cipher.mp3", "Cipher by Kevin MacLeod"),
-    ("https://incompetech.com/music/royalty-free/mp3-royaltyfree/Investigations.mp3", "Investigations by Kevin MacLeod"),
-    ("https://incompetech.com/music/royalty-free/mp3-royaltyfree/Mystery%20Sax.mp3", "Mystery Sax by Kevin MacLeod"),
-]
+MUSIC_DIR = Path(__file__).resolve().parent / "music"
 
 REQUIRED_ENV = {
     "GROQ_API_KEY": GROQ_API_KEY,
@@ -428,26 +433,36 @@ def download_file(url: str, dest: Path) -> Path:
 
 
 def get_bg_music(dest_dir: Path) -> Path | None:
-    """Best-effort background-music download. Never raises — a music problem
-    should never fail the whole pipeline; it just publishes without music,
-    same as before."""
+    """Best-effort background-music selection. Never raises — a music
+    problem should never fail the whole pipeline; it just publishes without
+    music. Local files in music/ are tried first (no network call, so
+    nothing to 404), then BG_MUSIC_URL, then silence."""
+    if MUSIC_DIR.is_dir():
+        local_tracks = sorted(
+            p for p in MUSIC_DIR.iterdir()
+            if p.is_file() and p.suffix.lower() in (".mp3", ".m4a", ".wav", ".aac")
+        )
+        if local_tracks:
+            chosen = random.choice(local_tracks)
+            log.info("Background music: %s (from music/)", chosen.name)
+            return chosen
+        log.info("music/ folder exists but has no audio files in it")
+
     if BG_MUSIC_URL:
-        candidates = [(u.strip(), "your BG_MUSIC_URL track") for u in BG_MUSIC_URL.split(",") if u.strip()]
-    else:
-        candidates = DEFAULT_BG_MUSIC_TRACKS
+        candidates = [u.strip() for u in BG_MUSIC_URL.split(",") if u.strip()]
+        if candidates:
+            url = random.choice(candidates)
+            dest = dest_dir / "music.mp3"
+            try:
+                download_file(url, dest)
+                log.info("Background music: %s", url)
+                return dest
+            except Exception as exc:  # noqa: BLE001
+                log.warning("Could not fetch BG_MUSIC_URL track — publishing without music: %s", exc)
+                return None
 
-    if not candidates:
-        return None
-
-    url, label = random.choice(candidates)
-    dest = dest_dir / "music.mp3"
-    try:
-        download_file(url, dest)
-        log.info("Background music: %s", label)
-        return dest
-    except Exception as exc:  # noqa: BLE001
-        log.warning("Could not fetch background music (%s) — publishing without music: %s", label, exc)
-        return None
+    log.info("No background music configured (add .mp3 files to a music/ folder, or set BG_MUSIC_URL) — publishing without music")
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -529,12 +544,18 @@ def assemble_video(
         # `original_size` MUST be set to the real output frame size. Without
         # it, ffmpeg's subtitles filter (via libass) assumes the legacy
         # default script resolution of 384x288 and scales/positions the text
-        # for that instead of the actual 1080x1920 frame — which is exactly
-        # what pushed the burned-in captions up into the middle of the video
-        # instead of the intended lower third.
+        # for that instead of the actual 1080x1920 frame.
+        #
+        # Style: Alignment=8 anchors the text to the TOP of the frame with
+        # MarginV as the distance down from the top edge, so captions sit in
+        # the upper third instead of covering the middle/lower area where
+        # the subject of the video usually is. BorderStyle=1 (outline+shadow,
+        # no BorderStyle=3 opaque box) means plain white text directly on the
+        # video with just a black outline for readability — no black
+        # background box behind it.
         f"subtitles='{srt_filter_path}':original_size={VIDEO_W}x{VIDEO_H}:force_style="
-        "'FontName=Arial,FontSize=20,PrimaryColour=&H00FFFFFF,"
-        "OutlineColour=&H00000000,BorderStyle=3,Outline=2,Alignment=2,MarginV=180'"
+        "'FontName=Arial,FontSize=22,Bold=1,PrimaryColour=&H00FFFFFF,"
+        "OutlineColour=&H00000000,BorderStyle=1,Outline=3,Shadow=1,Alignment=8,MarginV=220'"
     )
 
     audio_inputs = ["-i", str(narration)]
