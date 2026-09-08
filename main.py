@@ -151,18 +151,7 @@ RETRY_BACKOFF_SECONDS = 5
 # your track elsewhere. If neither is available, the pipeline simply
 # publishes without music instead of failing the run.
 BG_MUSIC_URL = _clean_env("BG_MUSIC_URL")
-# Prefer a direct GitHub Raw URL. Multiple URLs may be comma-separated.
-BG_MUSIC_GITHUB_RAW_URL = _clean_env("BG_MUSIC_GITHUB_RAW_URL")
-MUSIC_VOLUME = float(os.getenv("MUSIC_VOLUME", "0.18"))
 MUSIC_DIR = Path(__file__).resolve().parent / "music"
-
-FONT_PATH = Path(__file__).resolve().parent / "Cairo-Bold.ttf"
-CAIRO_FONT_URL = os.getenv(
-    "CAIRO_FONT_URL",
-    "https://raw.githubusercontent.com/google/fonts/main/ofl/cairo/Cairo%5Bslnt,wght%5D.ttf",
-)
-FONT_SIZE = 60
-TEXT_Y = 320
 
 REQUIRED_ENV = {
     "GROQ_API_KEY": GROQ_API_KEY,
@@ -292,18 +281,15 @@ MAX_AUDIO_SECONDS = 82.0
 def generate_topic() -> Topic:
     log.info("Generating viral topic via Groq (%s)...", GROQ_MODEL)
 
-    def _groq_chat(messages: list[dict[str, str]], strict_json: bool = True) -> str:
+    def _groq_chat(messages: list[dict[str, str]]) -> str:
         payload = {
             "model": GROQ_MODEL,
             "messages": messages,
-            # GPT-OSS may spend completion tokens on hidden reasoning before
-            # emitting JSON. 1536 was too small for a 90-130 word Arabic script.
-            "max_completion_tokens": 4096,
+            "response_format": {"type": "json_object"},
+            "max_completion_tokens": 1536,
             "reasoning_effort": "low",
             "temperature": 0.9,
         }
-        if strict_json:
-            payload["response_format"] = {"type": "json_object"}
         resp = requests.post(
             GROQ_ENDPOINT,
             headers={
@@ -314,14 +300,7 @@ def generate_topic() -> Topic:
             timeout=60,
         )
         if resp.status_code != 200:
-            # Some Groq/model combinations reject strict JSON mode even though
-            # they can return a valid JSON object in ordinary text mode.
-            # Retry once without response_format; extract_json_block() below
-            # already handles markdown fences and surrounding prose.
-            if strict_json and resp.status_code == 400 and "json_validate_failed" in resp.text:
-                log.warning("Groq strict JSON mode failed; retrying in text mode")
-                return _groq_chat(messages, strict_json=False)
-            raise PipelineError(f"Groq API error {resp.status_code}: {resp.text[:800]}")
+            raise PipelineError(f"Groq API error {resp.status_code}: {resp.text[:500]}")
         data = resp.json()
         raw_text = data.get("choices", [{}])[0].get("message", {}).get("content", "")
         if not raw_text:
@@ -494,19 +473,13 @@ def get_bg_music(dest_dir: Path) -> Path | None:
         log.info("Background music: using %s", chosen)
         return chosen
 
-    music_urls = ",".join(filter(None, [BG_MUSIC_GITHUB_RAW_URL, BG_MUSIC_URL]))
-    if music_urls:
-        candidates = [u.strip() for u in music_urls.split(",") if u.strip()]
+    if BG_MUSIC_URL:
+        candidates = [u.strip() for u in BG_MUSIC_URL.split(",") if u.strip()]
         if candidates:
             url = random.choice(candidates)
             dest = dest_dir / "music.mp3"
             try:
-                # GitHub links must be Raw/content links, not an HTML repository page.
-                if "github.com" in url and "/raw/" not in url and "raw.githubusercontent.com" not in url:
-                    raise PipelineError("GitHub music URL is not a direct Raw URL")
                 download_file(url, dest)
-                if dest.stat().st_size < 1024:
-                    raise PipelineError("Downloaded music file is unexpectedly small")
                 log.info("Background music: %s", url)
                 return dest
             except Exception as exc:  # noqa: BLE001
@@ -514,7 +487,7 @@ def get_bg_music(dest_dir: Path) -> Path | None:
                 return None
 
     log.info(
-        "No background music configured — checked %s (recursively) and GitHub Raw URL for "
+        "No background music configured — checked %s (recursively) for "
         "%s files, and BG_MUSIC_URL is unset. Add audio files to one of "
         "those folders (committed to the repo) or set BG_MUSIC_URL.",
         ", ".join(str(d) for d in candidate_dirs), "/".join(audio_exts),
@@ -591,135 +564,45 @@ def build_srt(text: str, duration: float, out_path: Path) -> Path:
     return out_path
 
 
-def ensure_arabic_font() -> Path:
-    """Download the real Cairo Arabic font once, with a clear failure message."""
-    if FONT_PATH.exists() and FONT_PATH.stat().st_size > 10_000:
-        return FONT_PATH
-    try:
-        log.info("Downloading Arabic font: %s", CAIRO_FONT_URL)
-        with requests.get(CAIRO_FONT_URL, stream=True, timeout=60) as resp:
-            resp.raise_for_status()
-            tmp = FONT_PATH.with_suffix(".tmp")
-            with tmp.open("wb") as out:
-                for chunk in resp.iter_content(1 << 16):
-                    if chunk:
-                        out.write(chunk)
-            if tmp.stat().st_size < 10_000:
-                raise PipelineError("Downloaded Cairo font is invalid or incomplete")
-            tmp.replace(FONT_PATH)
-    except (requests.RequestException, OSError) as exc:
-        raise PipelineError(f"Could not download Cairo-Bold.ttf: {exc}") from exc
-    return FONT_PATH
-
-
-def _arabic_display(line: str) -> str:
-    """Shape an already unvowelled Arabic line, then apply bidi ordering.
-
-    The input is deliberately stripped of Arabic harakat before wrapping and
-    before shaping. This prevents combining marks from being reordered or
-    visually detached by the rasterizer while preserving connected glyphs.
-    """
-    import arabic_reshaper
-    from bidi.algorithm import get_display
-
-    reshaped_line = arabic_reshaper.reshape(line)
-    return get_display(reshaped_line)
-
-
-def build_subtitle_video(text: str, duration: float, out_dir: Path) -> Path:
-    """Render correctly shaped Arabic text at y=320 into timed transparent PNGs."""
-    try:
-        from PIL import Image, ImageDraw, ImageFont
-    except ImportError as exc:
-        raise PipelineError(
-            "Missing Pillow. Install all dependencies with: "
-            "python -m pip install -r requirements.txt"
-        ) from exc
-
-    try:
-        import arabic_reshaper  # noqa: F401
-        from bidi.algorithm import get_display  # noqa: F401
-    except ImportError as exc:
-        raise PipelineError(
-            "Missing Arabic text dependencies. Install with: "
-            "python -m pip install -r requirements.txt"
-        ) from exc
-
-    font = ImageFont.truetype(str(ensure_arabic_font()), FONT_SIZE)
-    # The official Google Fonts file is variable; select its Bold instance when
-    # Pillow exposes variation controls, while retaining a safe fallback.
-    if hasattr(font, "set_variation_by_name"):
-        try:
-            font.set_variation_by_name("Bold")
-        except (OSError, ValueError):
-            log.warning("Could not select Cairo Bold variation; using default instance")
-    # Remove all Arabic harakat before word wrapping or any RTL processing.
-    plain_text = re.sub(r"[\u0617-\u061A\u064B-\u0652]", "", text)
-    words = plain_text.split()
-    chunks = [words[i:i + 4] for i in range(0, len(words), 4)] or [[]]
-    per_chunk = duration / len(chunks)
-    image_paths: list[Path] = []
-
-    for index, chunk in enumerate(chunks):
-        # Word wrap is performed on original Arabic text, before shaping/bidi.
-        original_line = " ".join(chunk)
-        rendered_line = _arabic_display(original_line)
-        image = Image.new("RGBA", (VIDEO_W, VIDEO_H), (0, 0, 0, 0))
-        draw = ImageDraw.Draw(image)
-        bbox = draw.textbbox((0, 0), rendered_line, font=font, stroke_width=4)
-        text_width = bbox[2] - bbox[0]
-        x = (VIDEO_W - text_width) / 2 - bbox[0]
-        draw.text(
-            (x, TEXT_Y), rendered_line, font=font, fill="white",
-            stroke_width=4, stroke_fill="black", anchor=None,
-        )
-        path = out_dir / f"subtitle_{index:04d}.png"
-        image.save(path, "PNG")
-        image_paths.append(path)
-
-    concat = out_dir / "subtitles.concat.txt"
-    with concat.open("w", encoding="utf-8") as f:
-        for index, path in enumerate(image_paths):
-            safe_path = str(path.resolve()).replace("'", "'\\''")
-            f.write(f"file '{safe_path}'\n")
-            segment = per_chunk if index < len(image_paths) - 1 else duration - per_chunk * index
-            f.write(f"duration {max(segment, 0.01):.6f}\n")
-        # concat requires the final file to be repeated to honor the last duration.
-        if image_paths:
-            safe_path = str(image_paths[-1].resolve()).replace("'", "'\\''")
-            f.write(f"file '{safe_path}'\n")
-
-    # qtrle preserves the transparent alpha channel and is supported in MOV;
-    # MP4 cannot store qtrle reliably on common FFmpeg builds.
-    subtitle_video = out_dir / "subtitles.mov"
-    cmd = [
-        "ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(concat),
-        "-vf", f"scale={VIDEO_W}:{VIDEO_H},format=rgba", "-t", f"{duration:.3f}",
-        "-c:v", "qtrle", str(subtitle_video),
-    ]
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.returncode != 0 or not subtitle_video.exists():
-        raise PipelineError(f"Subtitle rendering failed: {result.stderr[-1500:]}")
-    return subtitle_video
-
-
 # ---------------------------------------------------------------------------
 # Step 4: Video assembly (ffmpeg)
 # ---------------------------------------------------------------------------
 
 def assemble_video(
-    bg_video: Path, narration: Path, subtitle_video: Path, out_path: Path,
-    music_path: Path | None = None,
+    bg_video: Path, narration: Path, srt_path: Path, out_path: Path, music_path: Path | None = None,
 ) -> Path:
     log.info("Assembling final video...")
     audio_duration = get_media_duration(narration)
 
+    # Escape path for ffmpeg's subtitles filter (colon needs escaping on all platforms)
+    srt_filter_path = str(srt_path).replace("\\", "/").replace(":", "\\:")
+
     vf = (
         f"scale={VIDEO_W}:{VIDEO_H}:force_original_aspect_ratio=increase,"
-        f"crop={VIDEO_W}:{VIDEO_H}[base]"
+        f"crop={VIDEO_W}:{VIDEO_H},"
+        # `original_size` MUST be set to the real output frame size. Without
+        # it, ffmpeg's subtitles filter (via libass) assumes the legacy
+        # default script resolution of 384x288 and scales/positions the text
+        # for that instead of the actual 1080x1920 frame.
+        #
+        # Style: Alignment=8 anchors text to the TOP-center of the frame,
+        # with MarginV as the distance down from the top edge — kept small
+        # enough (90px on a 1920px-tall frame) to sit right under the
+        # phone status bar / app icons that platforms overlay at the very
+        # top, without being cut off. FontSize dropped hard (14, from 20)
+        # so a 3-word chunk reads comfortably small on an actual mobile
+        # screen instead of dominating it. BorderStyle=1 (outline+shadow
+        # only) plus a light Outline=1.5 keeps the white text crisp and
+        # readable without a thick blobby border. MarginL/MarginR give
+        # each chunk plenty of width headroom so libass never auto-wraps
+        # it onto a second line.
+        f"subtitles='{srt_filter_path}':original_size={VIDEO_W}x{VIDEO_H}:force_style="
+        "'FontName=Arial,FontSize=14,Bold=1,PrimaryColour=&H00FFFFFF,"
+        "OutlineColour=&H00000000,BorderStyle=1,Outline=1.5,Shadow=0,"
+        "Alignment=8,MarginV=90,MarginL=100,MarginR=100,WrapStyle=1'"
     )
 
-    audio_inputs = ["-i", str(subtitle_video), "-i", str(narration)]
+    audio_inputs = ["-i", str(narration)]
     if music_path is not None:
         audio_inputs += ["-i", str(music_path)]
 
@@ -728,19 +611,19 @@ def assemble_video(
         # loop/trim the music to the narration's exact length, short fades
         # at the start/end so it doesn't cut off abruptly.
         filter_complex = (
-            f"[3:a]aloop=loop=-1:size=2e9,atrim=0:{audio_duration:.2f},"
+            f"[2:a]aloop=loop=-1:size=2e9,atrim=0:{audio_duration:.2f},"
             f"afade=t=in:st=0:d=1.5,afade=t=out:st={max(audio_duration - 1.5, 0):.2f}:d=1.5,"
-            f"volume={max(0.01, min(MUSIC_VOLUME, 1.0)):.3f}[music];"
-            f"[2:a][music]amix=inputs=2:duration=first:dropout_transition=2:normalize=0[aout];"
-            f"[0:v]{vf};[1:v]format=rgba[subs];[base][subs]overlay=0:0:format=auto[vout]"
+            f"volume=0.18[music];"
+            f"[1:a][music]amix=inputs=2:duration=first:dropout_transition=2:normalize=0[aout]"
         )
         cmd = [
             "ffmpeg", "-y",
             "-stream_loop", "-1", "-i", str(bg_video),
             *audio_inputs,
             "-t", f"{audio_duration:.2f}",
+            "-vf", vf,
             "-filter_complex", filter_complex,
-            "-map", "[vout]", "-map", "[aout]",
+            "-map", "0:v:0", "-map", "[aout]",
             "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
             "-c:a", "aac", "-b:a", "192k",
             "-shortest",
@@ -752,8 +635,8 @@ def assemble_video(
             "-stream_loop", "-1", "-i", str(bg_video),
             *audio_inputs,
             "-t", f"{audio_duration:.2f}",
-            "-filter_complex", f"[0:v]{vf};[1:v]format=rgba[subs];[base][subs]overlay=0:0:format=auto[vout]",
-            "-map", "[vout]", "-map", "2:a:0",
+            "-vf", vf,
+            "-map", "0:v:0", "-map", "1:a:0",
             "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
             "-c:a", "aac", "-b:a", "192k",
             "-shortest",
@@ -1049,13 +932,10 @@ def run_pipeline() -> None:
             json.dumps(topic.__dict__, ensure_ascii=False, indent=2), encoding="utf-8"
         )
 
-    subtitle_video_path = build_subtitle_video(
-        topic.narration_script, audio_duration, run_dir
-    )
+    srt_path = build_srt(topic.narration_script, audio_duration, run_dir / "subtitles.srt")
 
     final_video_path = assemble_video(
-        bg_video_path, narration_path, subtitle_video_path,
-        run_dir / "final.mp4", music_path=music_path,
+        bg_video_path, narration_path, srt_path, run_dir / "final.mp4", music_path=music_path,
     )
 
     result = publish_video(final_video_path, topic, BUFFER_CHANNEL_IDS)
