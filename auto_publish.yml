@@ -1,0 +1,62 @@
+name: Auto Publish Shorts
+
+on:
+  workflow_dispatch: {}   # allows manual runs from the Actions tab
+  schedule:
+    # Egypt is UTC+2 (Cairo standard time, no DST). Adjust by 1 hour if/when
+    # Egypt observes daylight saving during your run window.
+    # 3:00 PM Cairo -> 13:00 UTC
+    - cron: "0 13 * * *"
+    # 9:00 PM Cairo -> 19:00 UTC
+    - cron: "0 19 * * *"
+
+concurrency:
+  group: auto-publish-${{ github.ref }}
+  cancel-in-progress: false
+
+# Needed so the built-in GITHUB_TOKEN can create a Release and upload the
+# video as an asset (this is how Buffer gets a public URL to fetch it from).
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install ffmpeg (with libass for subtitle burn-in)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run content pipeline
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
+          BUFFER_API_KEY: ${{ secrets.BUFFER_API_KEY }}
+          BUFFER_CHANNEL_IDS: ${{ secrets.BUFFER_CHANNEL_IDS }}
+          # The built-in, auto-generated token — no need to create your own.
+          # 'permissions: contents: write' above is what lets it create a
+          # Release in this repo.
+          GH_RELEASE_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python main.py
+
+      - name: Upload run artifacts (topic, subtitles, final video) on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pipeline-run-${{ github.run_id }}
+          path: work/
+          retention-days: 5
