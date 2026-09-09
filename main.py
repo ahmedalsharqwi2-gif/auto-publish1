@@ -681,8 +681,30 @@ def build_subtitles(text: str, duration: float, out_path: Path, timings_path: Pa
         log.warning("No TTS word timings available; using proportional fallback (captions may drift)")
         words = text.split()
         word_chunks = [words[i:i + 8] for i in range(0, len(words), 8)] or [words]
-        per_chunk = duration / len(word_chunks)
-        chunks = [(chunk, i * per_chunk, (i + 1) * per_chunk) for i, chunk in enumerate(word_chunks)]
+
+        # Weight each chunk by character length instead of slicing the
+        # audio into equal-length pieces per chunk of 8 words — a chunk of
+        # eight short words takes noticeably less time to say than one of
+        # eight long words, so equal slicing drifted increasingly out of
+        # sync as the video went on. A chunk ending in sentence-final
+        # punctuation (a natural pause point — e.g. right after the hook's
+        # "؟") also gets extra weight to approximate the pause a real
+        # speaker takes there, which is exactly where drift was most
+        # noticeable (right at the start, after the hook question).
+        def _chunk_weight(chunk: list[str]) -> float:
+            weight = sum(len(w) for w in chunk) + len(chunk)  # +1/word for inter-word gaps
+            if chunk and chunk[-1][-1:] in "؟?.!":
+                weight += 6  # approximate end-of-sentence pause
+            return max(weight, 1.0)
+
+        weights = [_chunk_weight(c) for c in word_chunks]
+        total_weight = sum(weights) or 1.0
+        chunks = []
+        cursor = 0.0
+        for chunk, w in zip(word_chunks, weights):
+            start = cursor
+            cursor += duration * (w / total_weight)
+            chunks.append((chunk, start, cursor))
 
     def fmt(t: float) -> str:
         # ASS timestamp: H:MM:SS.cc (centiseconds, hour NOT zero-padded).
@@ -765,6 +787,19 @@ def assemble_video(
     if music_path is not None:
         audio_inputs += ["-i", str(music_path)]
 
+    # Force a constant output frame rate explicitly. Without this the output
+    # simply inherits whatever the Pexels source reports, and stock footage
+    # is frequently VFR (variable frame rate) — looping it with
+    # -stream_loop creates an irregular-duration frame at each loop seam,
+    # which pulls the *average* frame rate ffprobe/Facebook measures below
+    # the nominal value (e.g. a "24fps" source can average ~23.9 once
+    # looped/cut). That's what triggered Facebook Reels' hard
+    # "frame rate must be at least 24 fps" rejection. -r as an output
+    # option forces ffmpeg to duplicate/drop frames as needed to hit an
+    # exact, constant rate — 30fps here, safely clear of the 24fps floor
+    # rather than sitting right on the edge of it.
+    OUTPUT_FPS = 30
+
     if music_path is not None:
         # Ducked mix: keep narration at full volume, music quiet underneath,
         # loop/trim the music to the narration's exact length, short fades
@@ -781,6 +816,7 @@ def assemble_video(
             *audio_inputs,
             "-t", f"{audio_duration:.2f}",
             "-vf", vf,
+            "-r", str(OUTPUT_FPS),
             "-filter_complex", filter_complex,
             "-map", "0:v:0", "-map", "[aout]",
             "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
@@ -795,6 +831,7 @@ def assemble_video(
             *audio_inputs,
             "-t", f"{audio_duration:.2f}",
             "-vf", vf,
+            "-r", str(OUTPUT_FPS),
             "-map", "0:v:0", "-map", "1:a:0",
             "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
             "-c:a", "aac", "-b:a", "192k",
