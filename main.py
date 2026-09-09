@@ -223,16 +223,40 @@ def _trim_script_to_word_limit(script: str, max_words: int) -> str:
     return truncated.strip()
 
 
-_ARABIC_DIACRITICS_RE = re.compile(r"[\u0610-\u061A\u064B-\u065F\u06D6-\u06DC\u06DF-\u06E8\u06EA-\u06ED\u0670]")
+_TASHKEEL_CHARS = "\u0610-\u061A\u064B-\u065F\u06D6-\u06DC\u06DF-\u06E8\u06EA-\u06ED\u0670"
+_TASHKEEL_RE = re.compile(f"[{_TASHKEEL_CHARS}]")
 
 
 def _normalize_for_compare(s: str) -> str:
     """Strip tashkeel/diacritics and collapse whitespace so hook_text can be
-    compared against the start of narration_script even when the model
-    re-typed the diacritics slightly differently (or dropped them)."""
-    s = _ARABIC_DIACRITICS_RE.sub("", s)
+    compared against narration_script even when the model re-typed the
+    diacritics slightly differently (or dropped them)."""
+    s = _TASHKEEL_RE.sub("", s)
     s = re.sub(r"\s+", " ", s).strip()
     return s
+
+
+def _fuzzy_word_pattern(word: str) -> str:
+    """Regex matching `word` inside the original (diacritic-bearing) text,
+    tolerating any tashkeel marks interleaved between its letters."""
+    gap = f"[{_TASHKEEL_CHARS}]*"
+    return gap.join(re.escape(ch) for ch in word)
+
+
+def _strip_duplicate_hook(hook: str, script: str) -> str:
+    """Remove any near-duplicate occurrence of hook_text left inside
+    narration_script — wherever the model put it (start, middle, or end,
+    e.g. mistakenly used as a closing "interactive question" instead of the
+    opening hook) — so it isn't spoken/shown twice once we prepend it
+    ourselves. Safe to call unconditionally: does nothing if no match."""
+    norm_hook_words = _normalize_for_compare(hook).split()
+    if not norm_hook_words:
+        return script
+    between = f"[\\s{_TASHKEEL_CHARS}]*"
+    pattern = between.join(_fuzzy_word_pattern(w) for w in norm_hook_words)
+    cleaned = re.sub(pattern, " ", script)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" ،.!؟\u061F")
+    return cleaned
 
 
 def extract_json_block(text: str) -> dict[str, Any]:
@@ -346,19 +370,15 @@ def generate_topic() -> Topic:
 
         # The prompt *asks* the model to open narration_script with
         # hook_text verbatim, but nothing enforced that — at temperature=0.9
-        # the model frequently drifts (rewords it, drops it, or answers
-        # first). That silently kills the hook the whole pipeline exists to
-        # deliver, so verify it here instead of trusting the model, and
-        # prepend it ourselves if it's missing.
-        norm_hook = _normalize_for_compare(topic.hook_text)
-        norm_script = _normalize_for_compare(topic.narration_script)
-        probe_len = min(len(norm_hook), 20)
-        if probe_len == 0 or not norm_script.startswith(norm_hook[:probe_len]):
-            log.warning(
-                "narration_script did not open with hook_text verbatim — prepending it "
-                "so the video still starts on the hook question"
-            )
-            topic.narration_script = f"{topic.hook_text} {topic.narration_script}".strip()
+        # the model frequently drifts: rewords it, drops it, or (observed in
+        # production) leaves it dangling at the END as the "closing
+        # interactive question" instead of the opening hook. Don't trust the
+        # model's placement at all: unconditionally strip any near-duplicate
+        # of hook_text out of narration_script (wherever it ended up) and
+        # prepend the real hook_text ourselves, so it's always first and
+        # never doubled.
+        topic.narration_script = _strip_duplicate_hook(topic.hook_text, topic.narration_script)
+        topic.narration_script = f"{topic.hook_text} {topic.narration_script}".strip()
 
         return topic, len(topic.narration_script.split())
 
