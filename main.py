@@ -173,7 +173,7 @@ class PipelineError(Exception):
 
 @dataclass
 class Topic:
-    hook_text: str          # 1-2 short shocking Arabic sentences (the opening hook only)
+    hook_text: str          # one strange/curious Arabic question (the opening hook — no answer)
     narration_script: str    # full multi-paragraph script that gets spoken + subtitled
     title: str               # Video title
     caption: str              # Caption for the post
@@ -250,13 +250,18 @@ SYSTEM_PROMPT = textwrap.dedent(
     بالمفاتيح التالية:
 
     {
-      "hook_text": "جملة أو جملتان قصيرتان وصادمتان بالعربية الفصحى المبسطة تُفتتح بها السكريبت، لا تتجاوز 20 كلمة إجمالاً، ويجب أن تكون مُشكّلة بالكامل (تشكيل كامل لكل حرف: فتحة/ضمة/كسرة/سكون/شدة/تنوين)",
-      "narration_script": "السكريبت الكامل الذي سيُروى بصوت التعليق ويظهر كترجمة على الفيديو. يجب أن يبدأ بنص hook_text نفسه حرفياً (بنفس التشكيل)، ثم يكمل بحقيقة صادمة واحدة فقط بإيجاز شديد بلا أي حشو أو تفاصيل جانبية، وينتهي بخاتمة قصيرة جداً أو سؤال تفاعلي من كلمات قليلة. يجب ألا يقل إجمالي عدد الكلمات عن 90 كلمة ولا يزيد عن 130 كلمة بالعربية الفصحى المبسطة (فيديو قصير جداً جداً ومكثّف بشدة يصلح لجميع منصات النشر بما فيها Facebook Reels ذات الحد الأقصى 90 ثانية)، مقسم إلى جمل قصيرة جداً وواضحة تصلح للترجمة النصية على الشاشة. يجب أن يكون النص بأكمله مُشكّلاً تشكيلاً كاملاً وصحيحاً نحوياً (كل كلمة، وليس فقط أواخر الكلمات) حتى ينطقه محرك تحويل النص إلى كلام بشكل صحيح ومفهوم",
+      "hook_text": "سؤال واحد فقط، غريب وغير متوقع ومثير للفضول، بالعربية الفصحى المبسطة، يُفتتح به الفيديو. يجب أن يُصاغ حرفياً كسؤال ينتهي بعلامة استفهام (؟)، ولا يكشف الإجابة إطلاقاً، ولا يتجاوز 15 كلمة. الهدف الوحيد منه أن يجعل المشاهد غير قادر على تجاوز الفيديو قبل معرفة الإجابة. استخدم تشكيلاً جزئياً وخفيفاً فقط (وليس تشكيلاً كاملاً) في المواضع التي قد يلتبس نطقها بدونه",
+      "narration_script": "السكريبت الكامل الذي سيُروى بصوت التعليق ويظهر كترجمة على الفيديو. يجب أن يبدأ بنص hook_text نفسه حرفياً (بنفس الصياغة)، ثم يُجيب مباشرة عن السؤال المطروح فيه بحقيقة صادمة واحدة فقط بإيجاز شديد بلا أي حشو أو تفاصيل جانبية، وينتهي بخاتمة قصيرة جداً أو سؤال تفاعلي من كلمات قليلة. يجب ألا يقل إجمالي عدد الكلمات عن 90 كلمة ولا يزيد عن 130 كلمة بالعربية الفصحى المبسطة (فيديو قصير جداً جداً ومكثّف بشدة يصلح لجميع منصات النشر بما فيها Facebook Reels ذات الحد الأقصى 90 ثانية)، مقسم إلى جمل قصيرة جداً وواضحة تصلح للترجمة النصية على الشاشة. استخدم تشكيلاً جزئياً وخفيفاً فقط عند الحاجة لتوضيح النطق (وليس تشكيلاً كاملاً على كل حرف)",
       "title": "عنوان جذاب قصير بالعربية",
       "caption": "كابشن للمنشور بالعربية، 1-3 جمل",
       "hashtags": ["#وسم1", "#وسم2", "#وسم3", "#وسم4", "#وسم5"],
       "search_keywords_en": "2-4 English keywords describing matching vertical stock footage, e.g. 'deep ocean underwater'"
     }
+
+    تعليمات إلزامية بخصوص الهوك (لا تتجاهلها):
+    - hook_text يجب أن يكون دائماً سؤالاً غريباً بصيغة استفهامية حقيقية (وليس جملة إخبارية صادمة)، مثل: "لماذا لا تستطيع...؟" أو "ما السبب الحقيقي وراء...؟" أو "هل تعلم ماذا يحدث لو...؟".
+    - لا تكشف الإجابة في hook_text إطلاقاً — الإجابة تأتي فقط داخل narration_script، بعد إعادة صياغة السؤال نفسه حرفياً في بدايته.
+    - تجنّب الأسئلة المستهلكة أو المتوقعة؛ اختر زاوية غريبة وغير شائعة حتى لو كان الموضوع نفسه معروفاً، بحيث يشعر المشاهد أنه *يجب* أن يعرف الإجابة.
 
     تعليمات إلزامية بخصوص الطول (لا تتجاهلها):
     - حقل narration_script يجب أن يحتوي على 90-130 كلمة عربية بالضبط تقريباً — ليس أكثر وليس أقل. هذا فيديو قصير جداً (Micro-short)، وليس فيديو Shorts عادياً.
@@ -264,9 +269,9 @@ SYSTEM_PROMPT = textwrap.dedent(
     - عدّ الكلمات فعلياً قبل إنهاء الإجابة، ولا تُسلّم نصاً أطول أو أقصر من المطلوب.
 
     تعليمات إلزامية بخصوص التشكيل (لا تتجاهلها):
-    - كل من hook_text وnarration_script يجب أن يكونا مُشكّلين تشكيلاً كاملاً (Full Arabic Diacritics/Tashkeel) على كل حرف تقريباً في كل كلمة، وليس فقط الحركة الإعرابية الأخيرة، وذلك حتى تنطقهما محركات تحويل النص إلى كلام (TTS) بنطق صحيح وواضح.
-    - استخدم الحركات القياسية (فتحة، ضمة، كسرة، سكون، شدة، تنوين بالفتح/الضم/الكسر) بدقة نحوية سليمة.
-    - لا تترك أي كلمة بدون تشكيل، حتى الكلمات القصيرة والحروف مثل (مِنْ، فِي، عَلَى، وَ، لَا).
+    - استخدم تشكيلاً جزئياً وخفيفاً (Selective/Light Tashkeel) فقط في المواضع التي قد يلتبس نطقها أو معناها بدون تشكيل (كلمات متشابهة رسماً ومختلفة نطقاً، أفعال قد تُقرأ بأكثر من صيغة، كلمات نادرة، إلخ).
+    - لا تضع تشكيلاً على كل حرف في كل كلمة — هذا غير مطلوب، ويجعل الترجمة النصية الظاهرة على الشاشة مزدحمة بصرياً دون داعٍ.
+    - اترك الكلمات الواضحة النطق بدون أي تشكيل، وتجنّب تشكيل أواخر الكلمات إعرابياً إلا إذا كان ضرورياً فعلاً لتفادي التباس حقيقي في المعنى أو النطق.
     """
 ).strip()
 
@@ -572,11 +577,26 @@ def get_media_duration(path: Path) -> float:
     return float(result.stdout.strip())
 
 
-def build_srt(text: str, duration: float, out_path: Path, timings_path: Path | None = None) -> Path:
-    """Build two-line RTL captions using edge-tts word-boundary timings.
+def _ass_escape(text: str) -> str:
+    """Strip characters that have special meaning inside an ASS Dialogue
+    Text field: '{' / '}' open/close an override block, and a raw newline
+    would break the one-line-per-event .ass format."""
+    return text.replace("{", "").replace("}", "").replace("\n", " ").replace("\r", " ")
 
-    This keeps each caption on screen for the exact spoken words instead of
-    dividing the total audio duration evenly, which was causing drift.
+
+def build_subtitles(text: str, duration: float, out_path: Path, timings_path: Path | None = None) -> Path:
+    """Build a two-line, RTL, word-timed .ass caption file synced to the
+    edge-tts narration.
+
+    This used to emit a plain .srt and rely on ffmpeg's `subtitles` filter
+    to auto-convert it to ASS at render time via `force_style`. That
+    auto-conversion silently falls back to a legacy 384x288 script
+    resolution, and `original_size` does NOT reliably compensate for that
+    (verified by rendering test frames: the caption came out far smaller
+    and further left than the style values implied). Authoring a real
+    .ass file directly, with PlayResX/PlayResY set to the *actual* output
+    resolution, removes that guesswork entirely — the numbers below are
+    real pixels on the real frame.
     """
     words = text.split()
     timing_data = []
@@ -606,24 +626,54 @@ def build_srt(text: str, duration: float, out_path: Path, timings_path: Path | N
         chunks = [(chunk, i * per_chunk, (i + 1) * per_chunk) for i, chunk in enumerate(word_chunks)]
 
     def fmt(t: float) -> str:
+        # ASS timestamp: H:MM:SS.cc (centiseconds, hour NOT zero-padded).
+        t = max(t, 0.0)
         h = int(t // 3600)
         m = int((t % 3600) // 60)
         s = int(t % 60)
-        ms = int((t - int(t)) * 1000)
-        return f"{h:02}:{m:02}:{s:02},{ms:03}"
+        cs = int(round((t - int(t)) * 100))
+        return f"{h:d}:{m:02}:{s:02}.{cs:02}"
 
-    lines = []
-    for i, (chunk_words, start, end) in enumerate(chunks):
+    rtl = "\u200f"  # RIGHT-TO-LEFT MARK — forces each caption line to lay out RTL
+    events = []
+    for chunk_words, start, end in chunks:
         split_at = max(1, (len(chunk_words) + 1) // 2)
-        rtl = "\u200f"
-        chunk_text = rtl + " ".join(chunk_words[:split_at])
+        line1 = rtl + _ass_escape(" ".join(chunk_words[:split_at]))
+        chunk_text = line1
         if len(chunk_words) > 1:
-            chunk_text += "\n" + rtl + " ".join(chunk_words[split_at:])
-        lines.append(str(i + 1))
-        lines.append(f"{fmt(start)} --> {fmt(end)}")
-        lines.append(chunk_text)
-        lines.append("")
-    out_path.write_text("\n".join(lines), encoding="utf-8")
+            line2 = rtl + _ass_escape(" ".join(chunk_words[split_at:]))
+            chunk_text += "\\N" + line2  # \N = forced ASS line break
+        events.append(f"Dialogue: 0,{fmt(start)},{fmt(end)},Caption,,0,0,0,,{chunk_text}")
+
+    # Style tuned for a VIDEO_W x VIDEO_H (1080x1920) vertical frame:
+    #   Alignment=8   -> anchors the block to TOP-center (7/8/9 = top row,
+    #                    8 = horizontally centered within the margins)
+    #   MarginV=260   -> distance from the top edge, in real pixels (since
+    #                    PlayResY == VIDEO_H) — sits comfortably below the
+    #                    phone's front-camera cutout
+    #   MarginL/R=60  -> symmetric, so Alignment=8 centers on the true
+    #                    frame center rather than an off-center box
+    #   Fontsize=64   -> readable at this resolution without dominating
+    #                    the screen; tune up/down to taste
+    #   Outline=3, Shadow=0, BorderStyle=1 -> crisp white text with a
+    #                    solid black outline, no separate drop shadow
+    ass_content = textwrap.dedent(f"""\
+        [Script Info]
+        ScriptType: v4.00+
+        PlayResX: {VIDEO_W}
+        PlayResY: {VIDEO_H}
+        WrapStyle: 2
+        ScaledBorderAndShadow: yes
+
+        [V4+ Styles]
+        Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+        Style: Caption,Arial,64,&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,1,0,0,0,100,100,0,0,1,3,0,8,60,60,260,1
+
+        [Events]
+        Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+        """) + "\n".join(events) + "\n"
+
+    out_path.write_text(ass_content, encoding="utf-8")
     return out_path
 
 
@@ -632,37 +682,24 @@ def build_srt(text: str, duration: float, out_path: Path, timings_path: Path | N
 # ---------------------------------------------------------------------------
 
 def assemble_video(
-    bg_video: Path, narration: Path, srt_path: Path, out_path: Path, music_path: Path | None = None,
+    bg_video: Path, narration: Path, subtitle_path: Path, out_path: Path, music_path: Path | None = None,
 ) -> Path:
     log.info("Assembling final video...")
     audio_duration = get_media_duration(narration)
 
     # Escape path for ffmpeg's subtitles filter (colon needs escaping on all platforms)
-    srt_filter_path = str(srt_path).replace("\\", "/").replace(":", "\\:")
+    subtitle_filter_path = str(subtitle_path).replace("\\", "/").replace(":", "\\:")
 
     vf = (
         f"scale={VIDEO_W}:{VIDEO_H}:force_original_aspect_ratio=increase,"
         f"crop={VIDEO_W}:{VIDEO_H},"
-        # `original_size` MUST be set to the real output frame size. Without
-        # it, ffmpeg's subtitles filter (via libass) assumes the legacy
-        # default script resolution of 384x288 and scales/positions the text
-        # for that instead of the actual 1080x1920 frame.
-        #
-        # Style: Alignment=8 anchors text to the TOP-center of the frame,
-        # with MarginV as the distance down from the top edge — kept small
-        # enough (90px on a 1920px-tall frame) to sit right under the
-        # phone status bar / app icons that platforms overlay at the very
-        # top safe zone, directly below the selfie-camera notch. FontSize is
-        # intentionally extremely small so the two-line block stays discreet
-        # screen instead of dominating it. BorderStyle=1 (outline+shadow
-        # only) plus a light Outline=1.5 keeps the white text crisp and
-        # readable without a thick blobby border. MarginL/MarginR give
-        # each chunk plenty of width headroom so libass never auto-wraps
-        # it onto a second line.
-        f"subtitles='{srt_filter_path}':original_size={VIDEO_W}x{VIDEO_H}:force_style="
-        "'FontName=Arial,FontSize=8,Bold=1,PrimaryColour=&H00FFFFFF,"
-        "OutlineColour=&H00000000,BorderStyle=1,Outline=1.5,Shadow=0,"
-        "Alignment=9,MarginV=260,MarginL=35,MarginR=45,WrapStyle=2'"
+        # All styling (font size, TOP-center position, RTL-safe margins)
+        # lives inside the .ass file itself (see build_subtitles), authored
+        # directly at PlayResX/PlayResY = VIDEO_W x VIDEO_H — i.e. the real
+        # output resolution. No force_style/original_size juggling needed
+        # here, which is what was silently mispositioning the captions
+        # before (verified with rendered test frames).
+        f"subtitles='{subtitle_filter_path}'"
     )
 
     audio_inputs = ["-i", str(narration)]
@@ -995,15 +1032,15 @@ def run_pipeline() -> None:
             json.dumps(topic.__dict__, ensure_ascii=False, indent=2), encoding="utf-8"
         )
 
-    srt_path = build_srt(
+    subtitle_path = build_subtitles(
         topic.narration_script,
         audio_duration,
-        run_dir / "subtitles.srt",
+        run_dir / "subtitles.ass",
         timings_path=narration_path.with_suffix(".timings.json"),
     )
 
     final_video_path = assemble_video(
-        bg_video_path, narration_path, srt_path, run_dir / "final.mp4", music_path=music_path,
+        bg_video_path, narration_path, subtitle_path, run_dir / "final.mp4", music_path=music_path,
     )
 
     result = publish_video(final_video_path, topic, BUFFER_CHANNEL_IDS)
