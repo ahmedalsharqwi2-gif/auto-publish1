@@ -223,6 +223,18 @@ def _trim_script_to_word_limit(script: str, max_words: int) -> str:
     return truncated.strip()
 
 
+_ARABIC_DIACRITICS_RE = re.compile(r"[\u0610-\u061A\u064B-\u065F\u06D6-\u06DC\u06DF-\u06E8\u06EA-\u06ED\u0670]")
+
+
+def _normalize_for_compare(s: str) -> str:
+    """Strip tashkeel/diacritics and collapse whitespace so hook_text can be
+    compared against the start of narration_script even when the model
+    re-typed the diacritics slightly differently (or dropped them)."""
+    s = _ARABIC_DIACRITICS_RE.sub("", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
+
+
 def extract_json_block(text: str) -> dict[str, Any]:
     """Pull a JSON object out of a model response that may be wrapped in prose or fences."""
     text = text.strip()
@@ -331,6 +343,23 @@ def generate_topic() -> Topic:
         )
         if not topic.hook_text:
             raise PipelineError("Groq returned an empty hook_text")
+
+        # The prompt *asks* the model to open narration_script with
+        # hook_text verbatim, but nothing enforced that — at temperature=0.9
+        # the model frequently drifts (rewords it, drops it, or answers
+        # first). That silently kills the hook the whole pipeline exists to
+        # deliver, so verify it here instead of trusting the model, and
+        # prepend it ourselves if it's missing.
+        norm_hook = _normalize_for_compare(topic.hook_text)
+        norm_script = _normalize_for_compare(topic.narration_script)
+        probe_len = min(len(norm_hook), 20)
+        if probe_len == 0 or not norm_script.startswith(norm_hook[:probe_len]):
+            log.warning(
+                "narration_script did not open with hook_text verbatim — prepending it "
+                "so the video still starts on the hook question"
+            )
+            topic.narration_script = f"{topic.hook_text} {topic.narration_script}".strip()
+
         return topic, len(topic.narration_script.split())
 
     def _call() -> Topic:
@@ -598,7 +627,6 @@ def build_subtitles(text: str, duration: float, out_path: Path, timings_path: Pa
     resolution, removes that guesswork entirely — the numbers below are
     real pixels on the real frame.
     """
-    words = text.split()
     timing_data = []
     if timings_path and timings_path.exists():
         try:
@@ -607,20 +635,31 @@ def build_subtitles(text: str, duration: float, out_path: Path, timings_path: Pa
             log.warning("Could not read TTS word timings; using fallback timing: %s", exc)
 
     timed_words = [x for x in timing_data if x.get("text")]
-    if len(timed_words) >= len(words):
-        # edge-tts normally emits one boundary per spoken token. Use the
-        # generated text order so punctuation/diacritics remain identical.
+
+    if timed_words:
+        # Build captions straight from what edge-tts itself reports it
+        # spoke, in its own order and with its own offsets — this is the
+        # only source guaranteed to match the audio. Previously the script
+        # was re-split independently with text.split() and matched to the
+        # TTS boundaries purely by index; any tokenization mismatch
+        # (Arabic-Indic digits, elongated tashkeel, a merged/split token —
+        # all common) silently shifted every caption after that point out
+        # of sync with the voice.
+        words = [w["text"] for w in timed_words]
+        offsets = [max(float(w.get("offset", 0)), 0.0) for w in timed_words]
+        durations = [max(float(w.get("duration", 0)), 0.0) for w in timed_words]
         chunks = []
         for i in range(0, len(words), 8):
             end_i = min(i + 8, len(words))
-            start = float(timed_words[i].get("offset", 0))
-            if end_i < len(timed_words):
-                end = float(timed_words[end_i].get("offset", duration))
+            start = offsets[i]
+            if end_i < len(words):
+                end = offsets[end_i]
             else:
-                end = duration
+                end = max(offsets[end_i - 1] + durations[end_i - 1], duration)
             chunks.append((words[i:end_i], max(start, 0), min(max(end, start + 0.25), duration)))
     else:
-        log.warning("TTS returned %d/%d word timings; using proportional fallback", len(timed_words), len(words))
+        log.warning("No TTS word timings available; using proportional fallback (captions may drift)")
+        words = text.split()
         word_chunks = [words[i:i + 8] for i in range(0, len(words), 8)] or [words]
         per_chunk = duration / len(word_chunks)
         chunks = [(chunk, i * per_chunk, (i + 1) * per_chunk) for i, chunk in enumerate(word_chunks)]
