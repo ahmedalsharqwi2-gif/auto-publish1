@@ -131,6 +131,7 @@ GROQ_API_KEY = _clean_env("GROQ_API_KEY")
 TTS_VOICE = os.getenv("TTS_VOICE", "ar-EG-SalmaNeural")
 
 GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
+GROQ_MAX_COMPLETION_TOKENS = int(os.getenv("GROQ_MAX_COMPLETION_TOKENS", "2200"))
 GROQ_ENDPOINT = "https://api.groq.com/openai/v1/chat/completions"
 PEXELS_SEARCH_ENDPOINT = "https://api.pexels.com/videos/search"
 BUFFER_ENDPOINT = "https://api.buffer.com"
@@ -386,6 +387,12 @@ def generate_topic() -> Topic:
             json=payload,
             timeout=60,
         )
+        if resp.status_code == 429:
+            match = re.search(r"Please try again in\s+([0-9.]+)s", resp.text)
+            wait_seconds = min(max(float(match.group(1)) if match else 15.0, 3.0), 90.0)
+            log.warning("Groq rate limit (429); waiting %.1fs before retry", wait_seconds)
+            time.sleep(wait_seconds + 1.0)
+            raise PipelineError(f"Groq API rate limit (429) after waiting {wait_seconds:.1f}s")
         if resp.status_code != 200:
             raise PipelineError(f"Groq API error {resp.status_code}: {resp.text[:500]}")
         data = resp.json()
@@ -441,11 +448,13 @@ def generate_topic() -> Topic:
         # ask the model, in the same conversation, to expand what it already
         # wrote. This fixes the actual problem (under-length output) instead
         # of just re-rolling the dice on a fresh topic with the same prompt.
+        # One compact repair request is enough; repeated full JSON rewrites
+        # consume the free-tier tokens-per-minute budget very quickly.
         expand_attempts = 0
-        while word_count < MIN_SCRIPT_WORDS and expand_attempts < 2:
+        while word_count < MIN_SCRIPT_WORDS and expand_attempts < 1:
             expand_attempts += 1
             log.warning(
-                "narration_script too short (%d words); asking model to expand in place (attempt %d/2)...",
+                "narration_script too short (%d words); asking model to expand in place (attempt %d/1)...",
                 word_count, expand_attempts,
             )
             messages.append({"role": "assistant", "content": raw_text})
