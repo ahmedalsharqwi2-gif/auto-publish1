@@ -14,6 +14,14 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     steps:
+      - name: Show scheduled trigger time
+        env:
+          TZ: Africa/Cairo
+        run: |
+          echo "GitHub event: ${{ github.event_name }}"
+          echo "GitHub UTC time: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+          echo "Cairo local time: $(date '+%Y-%m-%d %H:%M:%S %Z')"
+
       - name: Checkout repository
         uses: actions/checkout@v4
 
