@@ -43,6 +43,7 @@ Optional environment variables:
 from __future__ import annotations
 
 import asyncio
+import difflib
 import json
 import logging
 import os
@@ -72,6 +73,12 @@ log = logging.getLogger("pipeline")
 
 WORK_DIR = Path(os.getenv("WORK_DIR", "./work"))
 WORK_DIR.mkdir(parents=True, exist_ok=True)
+TOPIC_HISTORY_FILE = Path(os.getenv("TOPIC_HISTORY_FILE", "topic_history.json"))
+MIN_AUDIO_SECONDS = float(os.getenv("MIN_AUDIO_SECONDS", "85"))
+MAX_AUDIO_SECONDS = float(os.getenv("MAX_AUDIO_SECONDS", "89"))
+MIN_SCRIPT_WORDS = int(os.getenv("MIN_SCRIPT_WORDS", "145"))
+MAX_SCRIPT_WORDS = int(os.getenv("MAX_SCRIPT_WORDS", "165"))
+HISTORY_LIMIT = int(os.getenv("HISTORY_LIMIT", "200"))
 
 def _clean_env(name: str) -> str | None:
     """Read an env var and strip ALL whitespace/newline characters from it.
@@ -179,6 +186,7 @@ class Topic:
     caption: str              # Caption for the post
     hashtags: list[str] = field(default_factory=list)
     search_keywords_en: str = ""  # English keywords for Pexels search
+    scene_keywords_en: list[str] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -259,6 +267,42 @@ def _strip_duplicate_hook(hook: str, script: str) -> str:
     return cleaned
 
 
+def _topic_fingerprint(topic: Topic | dict[str, Any]) -> str:
+    values = [topic.get(k, "") if isinstance(topic, dict) else getattr(topic, k, "")
+              for k in ("title", "hook_text", "search_keywords_en")]
+    return re.sub(r"[^\w\u0600-\u06ff]+", " ", " ".join(map(str, values))).strip().lower()
+
+
+def load_topic_history() -> list[dict[str, Any]]:
+    try:
+        data = json.loads(TOPIC_HISTORY_FILE.read_text(encoding="utf-8"))
+        return data if isinstance(data, list) else []
+    except (OSError, json.JSONDecodeError):
+        return []
+
+
+def topic_is_too_similar(topic: Topic, history: list[dict[str, Any]]) -> bool:
+    candidate = _topic_fingerprint(topic)
+    candidate_words = set(candidate.split())
+    for old in history:
+        old_fp = _topic_fingerprint(old)
+        if candidate == old_fp or difflib.SequenceMatcher(None, candidate, old_fp).ratio() >= 0.68:
+            return True
+        old_words = set(old_fp.split())
+        if candidate_words and old_words and len(candidate_words & old_words) / len(candidate_words | old_words) >= 0.55:
+            return True
+    return False
+
+
+def remember_topic(topic: Topic) -> None:
+    history = load_topic_history()
+    history.append({"title": topic.title, "hook_text": topic.hook_text,
+                    "search_keywords_en": topic.search_keywords_en,
+                    "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
+    TOPIC_HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
+    TOPIC_HISTORY_FILE.write_text(json.dumps(history[-HISTORY_LIMIT:], ensure_ascii=False, indent=2), encoding="utf-8")
+
+
 def extract_json_block(text: str) -> dict[str, Any]:
     """Pull a JSON object out of a model response that may be wrapped in prose or fences."""
     text = text.strip()
@@ -287,11 +331,12 @@ SYSTEM_PROMPT = textwrap.dedent(
 
     {
       "hook_text": "سؤال واحد فقط، غريب وغير متوقع ومثير للفضول، بالعربية الفصحى المبسطة، يُفتتح به الفيديو. يجب أن يُصاغ حرفياً كسؤال ينتهي بعلامة استفهام (؟)، ولا يكشف الإجابة إطلاقاً، ولا يتجاوز 15 كلمة. الهدف الوحيد منه أن يجعل المشاهد غير قادر على تجاوز الفيديو قبل معرفة الإجابة. استخدم تشكيلاً جزئياً وخفيفاً فقط (وليس تشكيلاً كاملاً) في المواضع التي قد يلتبس نطقها بدونه",
-      "narration_script": "السكريبت الكامل الذي سيُروى بصوت التعليق ويظهر كترجمة على الفيديو. يجب أن يبدأ بنص hook_text نفسه حرفياً (بنفس الصياغة)، ثم يُجيب مباشرة عن السؤال المطروح فيه بحقيقة صادمة واحدة فقط بإيجاز شديد بلا أي حشو أو تفاصيل جانبية، وينتهي بخاتمة قصيرة جداً أو سؤال تفاعلي من كلمات قليلة. يجب ألا يقل إجمالي عدد الكلمات عن 90 كلمة ولا يزيد عن 130 كلمة بالعربية الفصحى المبسطة (فيديو قصير جداً جداً ومكثّف بشدة يصلح لجميع منصات النشر بما فيها Facebook Reels ذات الحد الأقصى 90 ثانية)، مقسم إلى جمل قصيرة جداً وواضحة تصلح للترجمة النصية على الشاشة. استخدم تشكيلاً جزئياً وخفيفاً فقط عند الحاجة لتوضيح النطق (وليس تشكيلاً كاملاً على كل حرف)",
+      "narration_script": "السكريبت الكامل الذي سيُروى بصوت التعليق ويظهر كترجمة على الفيديو. يبدأ بـ hook_text حرفياً ثم يجيب عنه بتفاصيل موثوقة ومثيرة في فقرات مترابطة، وينتهي بخاتمة قصيرة. يجب أن يكون بين 145 و165 كلمة عربية، لإنتاج فيديو بين 85 و89 ثانية دون تجاوز 90 ثانية، مقسم إلى جمل قصيرة واضحة.",
       "title": "عنوان جذاب قصير بالعربية",
       "caption": "كابشن للمنشور بالعربية، 1-3 جمل",
       "hashtags": ["#وسم1", "#وسم2", "#وسم3", "#وسم4", "#وسم5"],
-      "search_keywords_en": "2-4 English keywords describing matching vertical stock footage, e.g. 'deep ocean underwater'"
+      "search_keywords_en": "2-4 English keywords for the main subject",
+      "scene_keywords_en": ["5-7 English searches, one per visual scene, in the exact order of the narration; each must visibly represent the paragraph it accompanies"]
     }
 
     تعليمات إلزامية بخصوص الهوك (لا تتجاهلها):
@@ -300,8 +345,8 @@ SYSTEM_PROMPT = textwrap.dedent(
     - تجنّب الأسئلة المستهلكة أو المتوقعة؛ اختر زاوية غريبة وغير شائعة حتى لو كان الموضوع نفسه معروفاً، بحيث يشعر المشاهد أنه *يجب* أن يعرف الإجابة.
 
     تعليمات إلزامية بخصوص الطول (لا تتجاهلها):
-    - حقل narration_script يجب أن يحتوي على 90-130 كلمة عربية بالضبط تقريباً — ليس أكثر وليس أقل. هذا فيديو قصير جداً (Micro-short)، وليس فيديو Shorts عادياً.
-    - الفيديو النهائي يُنشر على Facebook Reels التي تفرض حداً أقصى صارماً بـ90 ثانية فعلية للصوت المسموع، وسرعة الراوي أبطأ مما يبدو (حوالي 1.7-1.8 كلمة/ثانية فقط)، لذلك يجب الالتزام الصارم بحد 130 كلمة كسقف مطلق.
+    - حقل narration_script يجب أن يحتوي على 145-165 كلمة عربية، بما يستهدف مدة صوتية بين 85 و89 ثانية دون تجاوز 90 ثانية.
+    - scene_keywords_en إلزامي: كل عبارة يجب أن تمثل جزءاً محدداً من النص، ولا تستخدم كلمات عامة لا علاقة لها بالموضوع.
     - عدّ الكلمات فعلياً قبل إنهاء الإجابة، ولا تُسلّم نصاً أطول أو أقصر من المطلوب.
 
     تعليمات إلزامية بخصوص التشكيل (لا تتجاهلها):
@@ -313,17 +358,11 @@ SYSTEM_PROMPT = textwrap.dedent(
 
 # Measured from real production runs: ar-EG-SalmaNeural speaks Arabic at
 # roughly 1.7-1.8 words/second — much slower than a naive estimate would
-# suggest. Facebook Reels hard-caps posts at 90 seconds, so the script must
-# stay well under that: 90-130 words keeps spoken narration in the ~55-75s
-# range even at the slower end of the measured rate. MAX_SCRIPT_WORDS is a
+# suggest. Facebook Reels hard-caps posts at 90 seconds, so actual TTS duration
+# is checked and must remain in the 85-89 second safety window. MAX_SCRIPT_WORDS is a
 # hard ceiling — scripts longer than this get trimmed at a sentence boundary
 # as a safety net, and MAX_AUDIO_SECONDS is a second, final safety net
 # checked against the *actual* generated audio duration before publishing.
-MIN_SCRIPT_WORDS = 80
-MAX_SCRIPT_WORDS = 135
-MAX_AUDIO_SECONDS = 82.0
-
-
 def generate_topic() -> Topic:
     log.info("Generating viral topic via Groq (%s)...", GROQ_MODEL)
 
@@ -364,6 +403,7 @@ def generate_topic() -> Topic:
             caption=parsed.get("caption", "").strip(),
             hashtags=list(parsed.get("hashtags", [])),
             search_keywords_en=parsed.get("search_keywords_en", "nature abstract").strip(),
+            scene_keywords_en=[str(x).strip() for x in parsed.get("scene_keywords_en", []) if str(x).strip()],
         )
         if not topic.hook_text:
             raise PipelineError("Groq returned an empty hook_text")
@@ -384,9 +424,11 @@ def generate_topic() -> Topic:
 
     def _call() -> Topic:
         user_msg = (
-            "أعطني فكرة فيديو اليوم بصيغة JSON كما هو محدد. "
-            "تذكير مهم: narration_script يجب أن يكون بين 90 و130 كلمة عربية بالضبط — "
-            "هذا الشرط أهم من أي شرط آخر في الطلب، وسيتم رفض أي إجابة أطول أو أقصر."
+            "أعطني فكرة فيديو جديدة بصيغة JSON كما هو محدد. "
+            f"يجب أن يكون narration_script بين {MIN_SCRIPT_WORDS} و{MAX_SCRIPT_WORDS} كلمة، "
+            "ويجب أن يحتوي scene_keywords_en على 5 إلى 7 مشاهد مرتبطة مباشرة بفقرات النص. "
+            "لا تكرر أياً من الموضوعات السابقة التالية: "
+            + json.dumps([x.get("title", "") for x in load_topic_history()[-40:]], ensure_ascii=False)
         )
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
@@ -412,8 +454,8 @@ def generate_topic() -> Topic:
                 "content": (
                     f"السكريبت الذي كتبته يحتوي على {word_count} كلمة فقط، وهذا أقل من المطلوب. "
                     f"أعد كتابة نفس كائن JSON بالكامل، مع الإبقاء على hook_text كما هو حرفياً، "
-                    f"لكن وسّع narration_script قليلاً بإضافة تفصيلة واحدة إضافية بسيطة "
-                    f"حتى يصل إلى 100-130 كلمة. أجب حصراً بكائن JSON صالح."
+                    f"لكن وسّع narration_script بتفاصيل مرتبطة مباشرة بالموضوع حتى يصل إلى {MIN_SCRIPT_WORDS}-{MAX_SCRIPT_WORDS} كلمة، "
+                    "وأضف 5-7 scene_keywords_en مرتبطة بفقرات النص. أجب حصراً بكائن JSON صالح."
                 ),
             })
             raw_text = _groq_chat(messages)
@@ -436,6 +478,10 @@ def generate_topic() -> Topic:
             )
             topic.narration_script = _trim_script_to_word_limit(topic.narration_script, MAX_SCRIPT_WORDS)
 
+        if len(topic.scene_keywords_en) < 5:
+            raise PipelineError("Groq returned fewer than 5 scene keywords; visual/text alignment is required")
+        if topic_is_too_similar(topic, load_topic_history()):
+            raise PipelineError("Generated topic is too similar to a previously published topic")
         return topic
 
     topic = with_retries(_call, what="Groq topic generation")
@@ -481,6 +527,43 @@ def search_pexels_video(keywords: str) -> str:
         raise PipelineError("No portrait-orientation video files found in Pexels results")
 
     return with_retries(_call, what="Pexels search")
+
+
+def search_pexels_videos(keywords_list: list[str]) -> list[str]:
+    """Fetch one portrait clip per semantic scene, avoiding duplicate URLs."""
+    urls: list[str] = []
+    for keywords in keywords_list:
+        try:
+            url = search_pexels_video(keywords)
+            if url not in urls:
+                urls.append(url)
+        except PipelineError as exc:
+            log.warning("No clip for scene %r: %s", keywords, exc)
+    if len(urls) < 5:
+        raise PipelineError(f"Only {len(urls)} distinct scene clips found; refusing to repeat unrelated footage")
+    return urls
+
+
+def build_multishot_background(clips: list[Path], duration: float, out_path: Path) -> Path:
+    """Create a sequence of distinct portrait shots covering the narration duration."""
+    segment = duration / len(clips)
+    inputs: list[str] = []
+    filters: list[str] = []
+    for i, clip in enumerate(clips):
+        inputs += ["-stream_loop", "-1", "-i", str(clip)]
+        filters.append(
+            f"[{i}:v]trim=duration={segment:.3f},setpts=PTS-STARTPTS,"
+            f"scale={VIDEO_W}:{VIDEO_H}:force_original_aspect_ratio=increase,crop={VIDEO_W}:{VIDEO_H},fps=30[v{i}]"
+        )
+    filters.append("".join(f"[v{i}]" for i in range(len(clips))) +
+                   f"concat=n={len(clips)}:v=1:a=0[outv]")
+    cmd = ["ffmpeg", "-y", *inputs, "-filter_complex", ";".join(filters),
+           "-map", "[outv]", "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+           "-an", str(out_path)]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0 or not out_path.exists() or out_path.stat().st_size == 0:
+        raise PipelineError(f"ffmpeg multi-shot background failed: {result.stderr[-2000:]}")
+    return out_path
 
 
 def download_file(url: str, dest: Path) -> Path:
@@ -1095,14 +1178,8 @@ def run_pipeline() -> None:
         json.dumps(topic.__dict__, ensure_ascii=False, indent=2), encoding="utf-8"
     )
 
-    bg_video_url = search_pexels_video(topic.search_keywords_en)
-    bg_video_path = download_file(bg_video_url, run_dir / "background.mp4")
-    music_path = get_bg_music(run_dir)
-
-    # Generating the narration is comparatively cheap, so if the actual
-    # spoken audio comes out longer than the Facebook Reels safety cap, retry
-    # with a fresh (hopefully shorter) topic a couple of times before giving
-    # up on this run entirely — cheaper than re-downloading footage/music.
+    # Generate narration first so the final video length is measured from the
+    # actual TTS audio, then choose enough distinct visual scenes to cover it.
     max_duration_attempts = 3
     narration_path = None
     audio_duration = 0.0
@@ -1110,23 +1187,27 @@ def run_pipeline() -> None:
         narration_path = generate_tts(topic.narration_script, run_dir / "narration.mp3")
         audio_duration = get_media_duration(narration_path)
         log.info("Narration audio duration: %.1fs (attempt %d/%d)", audio_duration, attempt, max_duration_attempts)
-        if audio_duration <= MAX_AUDIO_SECONDS:
+        if MIN_AUDIO_SECONDS <= audio_duration <= MAX_AUDIO_SECONDS:
             break
         log.warning(
-            "Narration audio is %.1fs, over the %.0fs Facebook Reels safety cap — "
-            "generating a fresh, shorter topic (attempt %d/%d)",
-            audio_duration, MAX_AUDIO_SECONDS, attempt, max_duration_attempts,
+            "Narration audio is %.1fs, target is %.0f-%.0fs — generating a fresh topic (attempt %d/%d)",
+            audio_duration, MIN_AUDIO_SECONDS, MAX_AUDIO_SECONDS, attempt, max_duration_attempts,
         )
         if attempt == max_duration_attempts:
             raise PipelineError(
-                f"Narration audio stayed over the {MAX_AUDIO_SECONDS:.0f}s safety cap after "
-                f"{max_duration_attempts} attempts — aborting this run rather than publish an "
-                "over-length video"
+                f"Narration audio did not reach the target {MIN_AUDIO_SECONDS:.0f}-{MAX_AUDIO_SECONDS:.0f}s range "
+                f"after {max_duration_attempts} attempts — aborting rather than publish the wrong length"
             )
         topic = generate_topic()
         (run_dir / "topic.json").write_text(
             json.dumps(topic.__dict__, ensure_ascii=False, indent=2), encoding="utf-8"
         )
+
+    remember_topic(topic)
+    scene_urls = search_pexels_videos(topic.scene_keywords_en)
+    scene_paths = [download_file(url, run_dir / f"scene_{i:02d}.mp4") for i, url in enumerate(scene_urls)]
+    bg_video_path = build_multishot_background(scene_paths, audio_duration, run_dir / "background.mp4")
+    music_path = get_bg_music(run_dir)
 
     subtitle_path = build_subtitles(
         topic.narration_script,
