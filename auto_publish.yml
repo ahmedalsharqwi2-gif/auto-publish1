@@ -49,12 +49,15 @@ jobs:
           MIN_AUDIO_SECONDS: '85'
           MAX_AUDIO_SECONDS: '89'
           MIN_SCRIPT_WORDS: '145'
-          MAX_SCRIPT_WORDS: '165'
+          MAX_SCRIPT_WORDS: '155'
+          MIN_SCENE_CLIPS: '4'
           TOPIC_HISTORY_FILE: 'topic_history.json'
         run: python 'main(4).py'
 
       - name: Persist topic history
-        if: success()
+        # Persist even when footage/publishing fails: the generated topic has
+        # already been used and must not be offered again on the next run.
+        if: always()
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
