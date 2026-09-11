@@ -77,8 +77,9 @@ TOPIC_HISTORY_FILE = Path(os.getenv("TOPIC_HISTORY_FILE", "topic_history.json"))
 MIN_AUDIO_SECONDS = float(os.getenv("MIN_AUDIO_SECONDS", "85"))
 MAX_AUDIO_SECONDS = float(os.getenv("MAX_AUDIO_SECONDS", "89"))
 MIN_SCRIPT_WORDS = int(os.getenv("MIN_SCRIPT_WORDS", "145"))
-MAX_SCRIPT_WORDS = int(os.getenv("MAX_SCRIPT_WORDS", "165"))
+MAX_SCRIPT_WORDS = int(os.getenv("MAX_SCRIPT_WORDS", "155"))
 HISTORY_LIMIT = int(os.getenv("HISTORY_LIMIT", "200"))
+MIN_SCENE_CLIPS = int(os.getenv("MIN_SCENE_CLIPS", "4"))
 
 def _clean_env(name: str) -> str | None:
     """Read an env var and strip ALL whitespace/newline characters from it.
@@ -332,12 +333,12 @@ SYSTEM_PROMPT = textwrap.dedent(
 
     {
       "hook_text": "سؤال واحد فقط، غريب وغير متوقع ومثير للفضول، بالعربية الفصحى المبسطة، يُفتتح به الفيديو. يجب أن يُصاغ حرفياً كسؤال ينتهي بعلامة استفهام (؟)، ولا يكشف الإجابة إطلاقاً، ولا يتجاوز 15 كلمة. الهدف الوحيد منه أن يجعل المشاهد غير قادر على تجاوز الفيديو قبل معرفة الإجابة. استخدم تشكيلاً جزئياً وخفيفاً فقط (وليس تشكيلاً كاملاً) في المواضع التي قد يلتبس نطقها بدونه",
-      "narration_script": "السكريبت الكامل الذي سيُروى بصوت التعليق ويظهر كترجمة على الفيديو. يبدأ بـ hook_text حرفياً ثم يجيب عنه بتفاصيل موثوقة ومثيرة في فقرات مترابطة، وينتهي بخاتمة قصيرة. يجب أن يكون بين 145 و165 كلمة عربية، لإنتاج فيديو بين 85 و89 ثانية دون تجاوز 90 ثانية، مقسم إلى جمل قصيرة واضحة.",
+      "narration_script": "السكريبت الكامل الذي سيُروى بصوت التعليق ويظهر كترجمة على الفيديو. يبدأ بـ hook_text حرفياً ثم يجيب عنه بتفاصيل موثوقة ومثيرة في فقرات مترابطة، وينتهي بخاتمة قصيرة. يجب أن يكون بين 145 و155 كلمة عربية من أول استجابة، ويفضل 145 كلمة، لإنتاج فيديو بين 85 و89 ثانية دون تجاوز 90 ثانية، مقسم إلى جمل قصيرة واضحة.",
       "title": "عنوان جذاب قصير بالعربية",
       "caption": "كابشن للمنشور بالعربية، 1-3 جمل",
       "hashtags": ["#وسم1", "#وسم2", "#وسم3", "#وسم4", "#وسم5"],
       "search_keywords_en": "2-4 English keywords for the main subject",
-      "scene_keywords_en": ["5-7 English searches, one per visual scene, in the exact order of the narration; each must visibly represent the paragraph it accompanies"]
+      "scene_keywords_en": ["4-7 English searches, one per visual scene, in the exact order of the narration; each must visibly represent the paragraph it accompanies"]
     }
 
     تعليمات إلزامية بخصوص الهوك (لا تتجاهلها):
@@ -346,8 +347,8 @@ SYSTEM_PROMPT = textwrap.dedent(
     - تجنّب الأسئلة المستهلكة أو المتوقعة؛ اختر زاوية غريبة وغير شائعة حتى لو كان الموضوع نفسه معروفاً، بحيث يشعر المشاهد أنه *يجب* أن يعرف الإجابة.
 
     تعليمات إلزامية بخصوص الطول (لا تتجاهلها):
-    - حقل narration_script يجب أن يحتوي على 145-165 كلمة عربية، بما يستهدف مدة صوتية بين 85 و89 ثانية دون تجاوز 90 ثانية.
-    - scene_keywords_en إلزامي: كل عبارة يجب أن تمثل جزءاً محدداً من النص، ولا تستخدم كلمات عامة لا علاقة لها بالموضوع.
+    - حقل narration_script يجب أن يحتوي من أول استجابة على 145-155 كلمة عربية؛ لا تكتب سكربتًا قصيرًا ثم تطلب منك إضافة كلمات لاحقًا.
+    - scene_keywords_en إلزامي ويجب أن يحتوي على 4-7 عبارات: كل عبارة يجب أن تمثل جزءاً محدداً من النص، ولا تستخدم كلمات عامة لا علاقة لها بالموضوع.
     - عدّ الكلمات فعلياً قبل إنهاء الإجابة، ولا تُسلّم نصاً أطول أو أقصر من المطلوب.
 
     تعليمات إلزامية بخصوص التشكيل (لا تتجاهلها):
@@ -433,7 +434,7 @@ def generate_topic() -> Topic:
         user_msg = (
             "أعطني فكرة فيديو جديدة بصيغة JSON كما هو محدد. "
             f"يجب أن يكون narration_script بين {MIN_SCRIPT_WORDS} و{MAX_SCRIPT_WORDS} كلمة، "
-            "ويجب أن يحتوي scene_keywords_en على 5 إلى 7 مشاهد مرتبطة مباشرة بفقرات النص. "
+            "ويجب أن يحتوي scene_keywords_en على 4 إلى 7 مشاهد مرتبطة مباشرة بفقرات النص. "
             "لا تكرر أياً من الموضوعات السابقة التالية: "
             + json.dumps([x.get("title", "") for x in load_topic_history()[-40:]], ensure_ascii=False)
         )
@@ -448,8 +449,8 @@ def generate_topic() -> Topic:
         # ask the model, in the same conversation, to expand what it already
         # wrote. This fixes the actual problem (under-length output) instead
         # of just re-rolling the dice on a fresh topic with the same prompt.
-        # One compact repair request is enough; repeated full JSON rewrites
-        # consume the free-tier tokens-per-minute budget very quickly.
+        # At most one compact repair request is allowed as a safety net; the
+        # primary prompt already requires the correct length from the first response.
         expand_attempts = 0
         while word_count < MIN_SCRIPT_WORDS and expand_attempts < 1:
             expand_attempts += 1
@@ -464,7 +465,7 @@ def generate_topic() -> Topic:
                     f"السكريبت الذي كتبته يحتوي على {word_count} كلمة فقط، وهذا أقل من المطلوب. "
                     f"أعد كتابة نفس كائن JSON بالكامل، مع الإبقاء على hook_text كما هو حرفياً، "
                     f"لكن وسّع narration_script بتفاصيل مرتبطة مباشرة بالموضوع حتى يصل إلى {MIN_SCRIPT_WORDS}-{MAX_SCRIPT_WORDS} كلمة، "
-                    "وأضف 5-7 scene_keywords_en مرتبطة بفقرات النص. أجب حصراً بكائن JSON صالح."
+                    "وأضف 4-7 scene_keywords_en مرتبطة بفقرات النص. أجب حصراً بكائن JSON صالح."
                 ),
             })
             raw_text = _groq_chat(messages)
@@ -487,8 +488,10 @@ def generate_topic() -> Topic:
             )
             topic.narration_script = _trim_script_to_word_limit(topic.narration_script, MAX_SCRIPT_WORDS)
 
-        if len(topic.scene_keywords_en) < 5:
-            raise PipelineError("Groq returned fewer than 5 scene keywords; visual/text alignment is required")
+        if len(topic.scene_keywords_en) < MIN_SCENE_CLIPS:
+            raise PipelineError(
+                f"Groq returned fewer than {MIN_SCENE_CLIPS} scene keywords; visual/text alignment is required"
+            )
         if topic_is_too_similar(topic, load_topic_history()):
             raise PipelineError("Generated topic is too similar to a previously published topic")
         return topic
@@ -548,8 +551,11 @@ def search_pexels_videos(keywords_list: list[str]) -> list[str]:
                 urls.append(url)
         except PipelineError as exc:
             log.warning("No clip for scene %r: %s", keywords, exc)
-    if len(urls) < 5:
-        raise PipelineError(f"Only {len(urls)} distinct scene clips found; refusing to repeat unrelated footage")
+    if len(urls) < MIN_SCENE_CLIPS:
+        raise PipelineError(
+            f"Only {len(urls)} distinct scene clips found; need at least {MIN_SCENE_CLIPS} "
+            "to build a varied video without repeating unrelated footage"
+        )
     return urls
 
 
