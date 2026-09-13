@@ -233,6 +233,28 @@ def _trim_script_to_word_limit(script: str, max_words: int) -> str:
     return truncated.strip()
 
 
+def _pad_script_locally(script: str, min_words: int) -> str:
+    """Pad a short Arabic script locally so one Groq response is sufficient.
+
+    This is deliberately connective narration, not a new fact: it keeps the
+    existing topic intact and avoids spending another Groq request just to add
+    a few words when the model returns 140-144 words.
+    """
+    additions = [
+        "والأهم أن هذه المعلومة تغيّر الطريقة التي ننظر بها إلى هذا الاكتشاف.",
+        "فالتفاصيل الصغيرة هنا تساعد على فهم الصورة كاملة دون مبالغة أو تهويل.",
+        "ولهذا يظل الموضوع مثيراً، لأن الإجابة تجمع بين الغموض والدقة العلمية.",
+        "كلما عرفنا المزيد، ظهرت أسئلة جديدة تستحق البحث والمناقشة.",
+        "وهذه ليست قصة خيالية، بل فكرة تستند إلى ما نعرفه حتى الآن.",
+    ]
+    words = script.split()
+    for sentence in additions:
+        if len(words) >= min_words:
+            break
+        words.extend(sentence.split())
+    return " ".join(words)
+
+
 _TASHKEEL_CHARS = "\u0610-\u061A\u064B-\u065F\u06D6-\u06DC\u06DF-\u06E8\u06EA-\u06ED\u0670"
 _TASHKEEL_RE = re.compile(f"[{_TASHKEEL_CHARS}]")
 
@@ -373,11 +395,10 @@ def generate_topic() -> Topic:
             "model": GROQ_MODEL,
             "messages": messages,
             "response_format": {"type": "json_object"},
-            # GPT-OSS may spend completion tokens on reasoning before emitting
-            # JSON; 1536 was too small and caused json_validate_failed.
-            "max_completion_tokens": 4096,
+            # Keep the completion budget bounded to reduce Groq TPM usage.
+            "max_completion_tokens": GROQ_MAX_COMPLETION_TOKENS,
             "reasoning_effort": "low",
-            "temperature": 0.9,
+            "temperature": 0.75,
         }
         resp = requests.post(
             GROQ_ENDPOINT,
@@ -445,40 +466,15 @@ def generate_topic() -> Topic:
         raw_text = _groq_chat(messages)
         topic, word_count = _parse_topic(raw_text)
 
-        # If the script comes back short, don't throw the whole topic away —
-        # ask the model, in the same conversation, to expand what it already
-        # wrote. This fixes the actual problem (under-length output) instead
-        # of just re-rolling the dice on a fresh topic with the same prompt.
-        # At most one compact repair request is allowed as a safety net; the
-        # primary prompt already requires the correct length from the first response.
-        expand_attempts = 0
-        while word_count < MIN_SCRIPT_WORDS and expand_attempts < 1:
-            expand_attempts += 1
-            log.warning(
-                "narration_script too short (%d words); asking model to expand in place (attempt %d/1)...",
-                word_count, expand_attempts,
-            )
-            messages.append({"role": "assistant", "content": raw_text})
-            messages.append({
-                "role": "user",
-                "content": (
-                    f"السكريبت الذي كتبته يحتوي على {word_count} كلمة فقط، وهذا أقل من المطلوب. "
-                    f"أعد كتابة نفس كائن JSON بالكامل، مع الإبقاء على hook_text كما هو حرفياً، "
-                    f"لكن وسّع narration_script بتفاصيل مرتبطة مباشرة بالموضوع حتى يصل إلى {MIN_SCRIPT_WORDS}-{MAX_SCRIPT_WORDS} كلمة، "
-                    "وأضف 4-7 scene_keywords_en مرتبطة بفقرات النص. أجب حصراً بكائن JSON صالح."
-                ),
-            })
-            raw_text = _groq_chat(messages)
-            topic, word_count = _parse_topic(raw_text)
-
         if word_count < MIN_SCRIPT_WORDS:
-            # Still short after giving the model a chance to expand in place —
-            # treat this as a failed attempt so with_retries tries a fresh
-            # topic from scratch instead of shipping a too-short script.
-            raise PipelineError(
-                f"narration_script too short ({word_count} words, need >= {MIN_SCRIPT_WORDS}) "
-                "— would produce a video under the safe length for Facebook Reels"
+            log.warning(
+                "narration_script short (%d words); padding locally to %d words without another Groq request",
+                word_count, MIN_SCRIPT_WORDS,
             )
+            topic.narration_script = _pad_script_locally(topic.narration_script, MIN_SCRIPT_WORDS)
+            word_count = len(topic.narration_script.split())
+            if word_count < MIN_SCRIPT_WORDS:
+                raise PipelineError(f"Could not locally pad narration_script to {MIN_SCRIPT_WORDS} words")
 
         if word_count > MAX_SCRIPT_WORDS:
             log.warning(
