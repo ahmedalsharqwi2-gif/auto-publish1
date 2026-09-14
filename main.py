@@ -76,6 +76,7 @@ WORK_DIR.mkdir(parents=True, exist_ok=True)
 TOPIC_HISTORY_FILE = Path(os.getenv("TOPIC_HISTORY_FILE", "topic_history.json"))
 MIN_AUDIO_SECONDS = float(os.getenv("MIN_AUDIO_SECONDS", "85"))
 MAX_AUDIO_SECONDS = float(os.getenv("MAX_AUDIO_SECONDS", "89"))
+TARGET_AUDIO_SECONDS = float(os.getenv("TARGET_AUDIO_SECONDS", "87"))
 MIN_SCRIPT_WORDS = int(os.getenv("MIN_SCRIPT_WORDS", "145"))
 MAX_SCRIPT_WORDS = int(os.getenv("MAX_SCRIPT_WORDS", "155"))
 HISTORY_LIMIT = int(os.getenv("HISTORY_LIMIT", "200"))
@@ -720,6 +721,43 @@ def get_media_duration(path: Path) -> float:
     return float(result.stdout.strip())
 
 
+def normalize_narration_duration(audio_path: Path, target_seconds: float) -> float:
+    """Fit TTS into a safe duration without generating another topic.
+
+    atempo preserves the voice while making small speed corrections. Word
+    boundary timestamps are scaled by the same factor so subtitles remain in
+    sync after the correction.
+    """
+    original = get_media_duration(audio_path)
+    if original <= 0 or abs(original - target_seconds) < 0.15:
+        return original
+    tempo = original / target_seconds
+    temp_path = audio_path.with_name(audio_path.stem + ".normalized.mp3")
+    result = subprocess.run([
+        "ffmpeg", "-y", "-v", "error", "-i", str(audio_path),
+        "-filter:a", f"atempo={tempo:.6f}", "-c:a", "libmp3lame", "-b:a", "192k",
+        str(temp_path),
+    ], capture_output=True, text=True)
+    if result.returncode != 0 or not temp_path.exists() or temp_path.stat().st_size == 0:
+        raise PipelineError(f"Could not normalize narration duration: {result.stderr[-1000:]}")
+    temp_path.replace(audio_path)
+
+    timings_path = audio_path.with_suffix(".timings.json")
+    if timings_path.exists():
+        try:
+            timings = json.loads(timings_path.read_text(encoding="utf-8"))
+            scale = target_seconds / original
+            for item in timings:
+                item["offset"] = float(item.get("offset", 0)) * scale
+                item["duration"] = float(item.get("duration", 0)) * scale
+            timings_path.write_text(json.dumps(timings, ensure_ascii=False), encoding="utf-8")
+        except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
+            log.warning("Could not rescale subtitle timings: %s", exc)
+    final_duration = get_media_duration(audio_path)
+    log.info("Narration normalized from %.1fs to %.1fs", original, final_duration)
+    return final_duration
+
+
 def _ass_escape(text: str) -> str:
     """Strip characters that have special meaning inside an ASS Dialogue
     Text field: '{' / '}' open/close an override block, and a raw newline
@@ -1198,21 +1236,25 @@ def run_pipeline() -> None:
         narration_path = generate_tts(topic.narration_script, run_dir / "narration.mp3")
         audio_duration = get_media_duration(narration_path)
         log.info("Narration audio duration: %.1fs (attempt %d/%d)", audio_duration, attempt, max_duration_attempts)
+        if audio_duration < MIN_AUDIO_SECONDS or audio_duration > MAX_AUDIO_SECONDS:
+            log.warning(
+                "Narration is %.1fs; correcting speed to the safe target %.1fs instead of generating another topic",
+                audio_duration, TARGET_AUDIO_SECONDS,
+            )
+            audio_duration = normalize_narration_duration(narration_path, TARGET_AUDIO_SECONDS)
         if MIN_AUDIO_SECONDS <= audio_duration <= MAX_AUDIO_SECONDS:
             break
         log.warning(
-            "Narration audio is %.1fs, target is %.0f-%.0fs — generating a fresh topic (attempt %d/%d)",
-            audio_duration, MIN_AUDIO_SECONDS, MAX_AUDIO_SECONDS, attempt, max_duration_attempts,
+            "Narration remains %.1fs after normalization; retrying TTS only (attempt %d/%d)",
+            audio_duration, attempt, max_duration_attempts,
         )
         if attempt == max_duration_attempts:
             raise PipelineError(
                 f"Narration audio did not reach the target {MIN_AUDIO_SECONDS:.0f}-{MAX_AUDIO_SECONDS:.0f}s range "
                 f"after {max_duration_attempts} attempts — aborting rather than publish the wrong length"
             )
-        topic = generate_topic()
-        (run_dir / "topic.json").write_text(
-            json.dumps(topic.__dict__, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
+        # Keep the same topic; a duration mismatch is a voice-speed issue, not
+        # a reason to spend another Groq request or risk topic repetition.
 
     remember_topic(topic)
     scene_urls = search_pexels_videos(topic.scene_keywords_en)
