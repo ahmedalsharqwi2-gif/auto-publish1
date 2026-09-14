@@ -1,66 +1,75 @@
-name: Auto publish videos
+name: Auto Publish Shorts
 
 on:
+  workflow_dispatch: {}   # allows manual runs from the Actions tab
   schedule:
-    # GitHub cron is UTC. 16:00 and 20:00 at UTC+03:00 = 13:00 and 17:00 UTC.
-    - cron: '0 13 * * *'
-    - cron: '0 17 * * *'
-  workflow_dispatch:
+    # Egypt currently observes DST (Egyptian Eastern Summer Time, UTC+3)
+    # from the last Friday of April through the last Friday of October.
+    # As of writing (Sep 2026) Cairo is UTC+3, so the cron below is offset
+    # by -3 hours from Cairo local time, NOT -2. This will need to change
+    # back to UTC+2 offsets once Egypt reverts to standard time on
+    # Oct 29, 2026 (i.e. back to "0 5,12,16 * * *", see the commented block
+    # below for the exact per-run breakdown).
+    #
+    # 8:00 AM Cairo (UTC+3, DST) -> 05:00 UTC
+    - cron: "0 5 * * *"
+    # 3:00 PM Cairo (UTC+3, DST) -> 12:00 UTC
+    - cron: "0 12 * * *"
+    # 7:00 PM Cairo (UTC+3, DST) -> 16:00 UTC
+    - cron: "0 16 * * *"
+    #
+    # --- After Oct 29, 2026 (Egypt back to UTC+2 standard time), swap to: ---
+    # - cron: "0 6 * * *"    # 8:00 AM Cairo (UTC+2)
+    # - cron: "0 13 * * *"   # 3:00 PM Cairo (UTC+2)
+    # - cron: "0 17 * * *"   # 7:00 PM Cairo (UTC+2)
 
+concurrency:
+  group: auto-publish-${{ github.ref }}
+  cancel-in-progress: false
+
+# Needed so the built-in GITHUB_TOKEN can create a Release and upload the
+# video as an asset (this is how Buffer gets a public URL to fetch it from).
 permissions:
   contents: write
 
 jobs:
   publish:
     runs-on: ubuntu-latest
-    steps:
-      - name: Show scheduled trigger time
-        env:
-          TZ: Africa/Cairo
-        run: |
-          echo "GitHub event: ${{ github.event_name }}"
-          echo "GitHub UTC time: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
-          echo "Cairo local time: $(date '+%Y-%m-%d %H:%M:%S %Z')"
+    timeout-minutes: 30
 
+    steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: "3.11"
 
-      - name: Install dependencies
+      - name: Install ffmpeg (with libass for subtitle burn-in)
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg
-          python -m pip install --upgrade pip
-          pip install requests edge-tts
 
-      - name: Generate and publish
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run content pipeline
         env:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
           BUFFER_API_KEY: ${{ secrets.BUFFER_API_KEY }}
           BUFFER_CHANNEL_IDS: ${{ secrets.BUFFER_CHANNEL_IDS }}
+          # The built-in, auto-generated token — no need to create your own.
+          # 'permissions: contents: write' above is what lets it create a
+          # Release in this repo.
           GH_RELEASE_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
-          MIN_AUDIO_SECONDS: '85'
-          MAX_AUDIO_SECONDS: '89'
-          MIN_SCRIPT_WORDS: '145'
-          MAX_SCRIPT_WORDS: '155'
-          MIN_SCENE_CLIPS: '4'
-          TOPIC_HISTORY_FILE: 'topic_history.json'
-        run: python 'main(4).py'
+        run: python main.py
 
-      - name: Persist topic history
-        # Persist even when footage/publishing fails: the generated topic has
-        # already been used and must not be offered again on the next run.
-        if: always()
-        run: |
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add topic_history.json
-          git diff --cached --quiet || git commit -m 'chore: persist published topic history'
-          git push
+      - name: Upload run artifacts (topic, subtitles, final video) on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pipeline-run-${{ github.run_id }}
+          path: work/
+          retention-days: 5
