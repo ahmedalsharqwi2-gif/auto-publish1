@@ -56,7 +56,11 @@ jobs:
           MAX_SCRIPT_WORDS: '155'
           MIN_SCENE_CLIPS: '4'
           TOPIC_HISTORY_FILE: 'topic_history.json'
-        run: python 'main(4).py'
+        run: |
+          echo "Python files in repository:"
+          find . -maxdepth 2 -type f -name '*.py' -print
+          test -f main.py || { echo "ERROR: main.py is missing from the repository"; exit 1; }
+          python main.py
 
       - name: Persist topic history
         # Persist even when footage/publishing fails: the generated topic has
