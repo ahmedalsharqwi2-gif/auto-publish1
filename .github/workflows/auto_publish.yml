@@ -1,62 +1,70 @@
-name: Auto Publish Shorts
+name: Auto publish videos (Cairo 08-15-19)
 
 on:
-  workflow_dispatch: {}   # allows manual runs from the Actions tab
   schedule:
-    # Egypt is UTC+2 (Cairo standard time, no DST). Adjust by 1 hour if/when
-    # Egypt observes daylight saving during your run window.
-    # 3:00 PM Cairo -> 13:00 UTC
-    - cron: "0 13 * * *"
-    # 9:00 PM Cairo -> 19:00 UTC
-    - cron: "0 19 * * *"
+    # GitHub cron is UTC. UTC+03:00 local times:
+    # 08:00 = 05:00 UTC, 15:00 = 12:00 UTC, 19:00 = 16:00 UTC.
+    - cron: '0 5 * * *'
+    - cron: '0 12 * * *'
+    - cron: '0 16 * * *'
+  workflow_dispatch:
 
-concurrency:
-  group: auto-publish-${{ github.ref }}
-  cancel-in-progress: false
-
-# Needed so the built-in GITHUB_TOKEN can create a Release and upload the
-# video as an asset (this is how Buffer gets a public URL to fetch it from).
 permissions:
   contents: write
 
 jobs:
   publish:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
-
     steps:
+      - name: Show scheduled trigger time
+        env:
+          TZ: Africa/Cairo
+        run: |
+          echo "GitHub event: ${{ github.event_name }}"
+          echo "Scheduled cron expression: ${{ github.event.schedule }}"
+          echo "GitHub UTC time: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+          echo "Cairo local time: $(date '+%Y-%m-%d %H:%M:%S %Z')"
+
       - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: '3.11'
 
-      - name: Install ffmpeg (with libass for subtitle burn-in)
+      - name: Install dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg
+          python -m pip install --upgrade pip
+          pip install requests edge-tts
 
-      - name: Install Python dependencies
-        run: pip install -r requirements.txt
-
-      - name: Run content pipeline
+      - name: Generate and publish
         env:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
           BUFFER_API_KEY: ${{ secrets.BUFFER_API_KEY }}
           BUFFER_CHANNEL_IDS: ${{ secrets.BUFFER_CHANNEL_IDS }}
-          # The built-in, auto-generated token — no need to create your own.
-          # 'permissions: contents: write' above is what lets it create a
-          # Release in this repo.
           GH_RELEASE_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: python main.py
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          MIN_AUDIO_SECONDS: '85'
+          MAX_AUDIO_SECONDS: '89'
+          TARGET_AUDIO_SECONDS: '87'
+          MIN_SCRIPT_WORDS: '145'
+          MAX_SCRIPT_WORDS: '155'
+          MIN_SCENE_CLIPS: '4'
+          TOPIC_HISTORY_FILE: 'topic_history.json'
+        run: python 'main(4).py'
 
-      - name: Upload run artifacts (topic, subtitles, final video) on failure
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: pipeline-run-${{ github.run_id }}
-          path: work/
-          retention-days: 5
+      - name: Persist topic history
+        # Persist even when footage/publishing fails: the generated topic has
+        # already been used and must not be offered again on the next run.
+        if: always()
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add topic_history.json
+          git diff --cached --quiet || git commit -m 'chore: persist published topic history'
+          git push
