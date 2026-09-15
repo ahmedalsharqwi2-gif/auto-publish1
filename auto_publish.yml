@@ -1,4 +1,4 @@
-name: Auto publish videos
+name: Auto publish videos (Cairo 08-15-19)
 
 on:
   schedule:
@@ -21,6 +21,7 @@ jobs:
           TZ: Africa/Cairo
         run: |
           echo "GitHub event: ${{ github.event_name }}"
+          echo "Scheduled cron expression: ${{ github.event.schedule }}"
           echo "GitHub UTC time: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
           echo "Cairo local time: $(date '+%Y-%m-%d %H:%M:%S %Z')"
 
