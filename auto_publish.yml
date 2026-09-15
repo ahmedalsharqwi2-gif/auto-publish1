@@ -63,6 +63,10 @@ jobs:
         # already been used and must not be offered again on the next run.
         if: always()
         run: |
+          if [ ! -f topic_history.json ]; then
+            echo "topic_history.json was not created; the pipeline failed before a topic was saved."
+            exit 0
+          fi
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add topic_history.json
