@@ -136,6 +136,14 @@ GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
 GROQ_MAX_COMPLETION_TOKENS = int(os.getenv("GROQ_MAX_COMPLETION_TOKENS", "2200"))
 GROQ_ENDPOINT = "https://api.groq.com/openai/v1/chat/completions"
 PEXELS_SEARCH_ENDPOINT = "https://api.pexels.com/videos/search"
+# How many of Pexels's own top (most-relevant) results to randomize among.
+# search_pexels_video() used to shuffle across the FULL up-to-15-result page
+# before picking one, which just as often picked a result Pexels itself
+# ranked 14th (loosely related at best) as the top match — this is why
+# scenes frequently had nothing to do with the script's topic. Keeping this
+# small preserves Pexels's relevance ranking while still giving some
+# variety across runs that reuse the same search phrase.
+TOP_RELEVANT_CANDIDATES = int(os.getenv("TOP_RELEVANT_CANDIDATES", "4"))
 BUFFER_ENDPOINT = "https://api.buffer.com"
 GITHUB_API_BASE = "https://api.github.com"
 
@@ -181,6 +189,26 @@ class PipelineError(Exception):
     """Raised for any unrecoverable pipeline failure."""
 
 
+# The exact 11 categories listed in SYSTEM_PROMPT's opening paragraph, kept
+# here too so remember_topic()/_call() can track which ones were used
+# recently and stop the model from repeating one (see recent_categories in
+# generate_topic()). If SYSTEM_PROMPT's category list is ever edited, update
+# this list to match.
+TOPIC_CATEGORIES = [
+    "غرائب دينية موثقة",
+    "عجائب عالم الحيوان",
+    "غرائب جسم الإنسان والطب",
+    "حقائق علمية صادمة",
+    "أسرار الفضاء والمحيطات",
+    "ظواهر طبيعية نادرة",
+    "قصص تاريخية غريبة",
+    "حضارات وعادات وثقافات غير مألوفة",
+    "اختراعات وظواهر تقنية",
+    "أماكن غامضة",
+    "حقائق نفسية واجتماعية",
+]
+
+
 @dataclass
 class Topic:
     hook_text: str          # one strange/curious Arabic question (the opening hook — no answer)
@@ -190,6 +218,7 @@ class Topic:
     hashtags: list[str] = field(default_factory=list)
     search_keywords_en: str = ""  # English keywords for Pexels search
     scene_keywords_en: list[str] = field(default_factory=list)
+    category: str = ""       # one of TOPIC_CATEGORIES — used to force domain rotation
 
 
 # ---------------------------------------------------------------------------
@@ -234,25 +263,36 @@ def _trim_script_to_word_limit(script: str, max_words: int) -> str:
     return truncated.strip()
 
 
-def _pad_script_locally(script: str, min_words: int) -> str:
-    """Pad a short Arabic script locally so one Groq response is sufficient.
+# Fixed engagement outro appended to the end of EVERY narration_script (both
+# spoken by the TTS voice and shown as subtitles) — replaces the old
+# generic, content-free filler sentences that used to appear only when a
+# Groq response came up short. Two variants, picked at random, so
+# consecutive videos don't end on identical audio/subtitles; both ask for a
+# like + subscribe, one of the two comment prompts, and a bell-notification
+# reminder.
+CTA_OUTRO_VARIANTS = [
+    "لو الفيديو عجبك متنساش تعمله لايك وتشترك في القناة، وقولّي في الكومنتات هل هذه المعلومة أول مرة تعرفها؟ ومتنساش تفعّل زر الجرس عشان يوصلك كل جديد.",
+    "اضغط لايك واشترك في القناة لو استفدت من الفيديو، واكتب لنا في الكومنتات عايز تعرف إيه في الفيديو الجاي، وفعّل الجرس عشان تكون أول واحد يعرف.",
+]
 
-    This is deliberately connective narration, not a new fact: it keeps the
-    existing topic intact and avoids spending another Groq request just to add
-    a few words when the model returns 140-144 words.
+
+def _append_engagement_outro(script: str, min_words: int) -> str:
+    """Append the fixed subscribe/like/comment/bell call-to-action to the
+    end of every narration_script — always, not only when the script came
+    up short.
+
+    Also doubles as the safety-net padding for a short Groq response: if
+    the script is still under min_words after one outro variant, a second
+    (different) variant is appended too — the same role the old generic
+    filler sentences played, but now with on-brand content instead of
+    empty padding.
     """
-    additions = [
-        "والأهم أن هذه المعلومة تغيّر الطريقة التي ننظر بها إلى هذا الاكتشاف.",
-        "فالتفاصيل الصغيرة هنا تساعد على فهم الصورة كاملة دون مبالغة أو تهويل.",
-        "ولهذا يظل الموضوع مثيراً، لأن الإجابة تجمع بين الغموض والدقة العلمية.",
-        "كلما عرفنا المزيد، ظهرت أسئلة جديدة تستحق البحث والمناقشة.",
-        "وهذه ليست قصة خيالية، بل فكرة تستند إلى ما نعرفه حتى الآن.",
-    ]
     words = script.split()
-    for sentence in additions:
-        if len(words) >= min_words:
+    variants = random.sample(CTA_OUTRO_VARIANTS, k=len(CTA_OUTRO_VARIANTS))
+    for i, variant in enumerate(variants):
+        if i > 0 and len(words) >= min_words:
             break
-        words.extend(sentence.split())
+        words.extend(variant.split())
     return " ".join(words)
 
 
@@ -323,6 +363,7 @@ def remember_topic(topic: Topic) -> None:
     history = load_topic_history()
     history.append({"title": topic.title, "hook_text": topic.hook_text,
                     "search_keywords_en": topic.search_keywords_en,
+                    "category": topic.category,
                     "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
     TOPIC_HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
     TOPIC_HISTORY_FILE.write_text(json.dumps(history[-HISTORY_LIMIT:], ensure_ascii=False, indent=2), encoding="utf-8")
@@ -352,7 +393,9 @@ SYSTEM_PROMPT = textwrap.dedent(
     الحقائق العلمية الصادمة، أسرار الفضاء والمحيطات، الظواهر الطبيعية النادرة،
     القصص التاريخية الغريبة، الحضارات والعادات والثقافات غير المألوفة،
     الاختراعات والظواهر التقنية، الأماكن الغامضة، والحقائق النفسية والاجتماعية.
-    نوّع المجال من فيديو إلى آخر ولا تجعل الموضوعات كلها عن الفضاء أو العلوم فقط.
+    نوّع المجال إلزامياً من فيديو إلى آخر. ستصلك في رسالة المستخدم قائمة بآخر الفئات
+    (category) التي استُخدمت في الفيديوهات الأخيرة — يُمنع منعاً باتاً اختيار أي فئة
+    مذكورة في تلك القائمة الآن، حتى لو كانت الفضاء أو العلوم أسهل في الإنتاج من غيرها.
     في الموضوعات الدينية استخدم مصادر أو أحداثاً موثقة ومحترمة، ولا تنسب حديثاً أو
     آية أو معجزة إلى الدين دون تحقق، ولا تخلط بين الحقيقة والرواية الشعبية.
     وفي الموضوعات الطبية والعلمية والتاريخية لا تختلق أرقاماً أو ادعاءات، وميّز بوضوح
@@ -363,23 +406,52 @@ SYSTEM_PROMPT = textwrap.dedent(
     بالمفاتيح التالية:
 
     {
+      "category": "اختر فئة واحدة فقط بالضبط من هذه القائمة (انسخ النص كما هو): غرائب دينية موثقة / عجائب عالم الحيوان / غرائب جسم الإنسان والطب / حقائق علمية صادمة / أسرار الفضاء والمحيطات / ظواهر طبيعية نادرة / قصص تاريخية غريبة / حضارات وعادات وثقافات غير مألوفة / اختراعات وظواهر تقنية / أماكن غامضة / حقائق نفسية واجتماعية — بشرط ألا تكون من الفئات الممنوعة المذكورة في رسالة المستخدم",
       "hook_text": "سؤال واحد فقط، غريب وغير متوقع ومثير للفضول، بالعربية الفصحى المبسطة، يُفتتح به الفيديو. يجب أن يُصاغ حرفياً كسؤال ينتهي بعلامة استفهام (؟)، ولا يكشف الإجابة إطلاقاً، ولا يتجاوز 15 كلمة. الهدف الوحيد منه أن يجعل المشاهد غير قادر على تجاوز الفيديو قبل معرفة الإجابة. استخدم تشكيلاً جزئياً وخفيفاً فقط (وليس تشكيلاً كاملاً) في المواضع التي قد يلتبس نطقها بدونه",
       "narration_script": "السكريبت الكامل الذي سيُروى بصوت التعليق ويظهر كترجمة على الفيديو. يبدأ بـ hook_text حرفياً ثم يجيب عنه بتفاصيل موثوقة ومثيرة في فقرات مترابطة، وينتهي بخاتمة قصيرة. يجب أن يكون بين 145 و155 كلمة عربية من أول استجابة، ويفضل 145 كلمة، لإنتاج فيديو بين 85 و89 ثانية دون تجاوز 90 ثانية، مقسم إلى جمل قصيرة واضحة.",
       "title": "عنوان جذاب قصير بالعربية",
       "caption": "كابشن للمنشور بالعربية، 1-3 جمل",
       "hashtags": ["#وسم1", "#وسم2", "#وسم3", "#وسم4", "#وسم5"],
       "search_keywords_en": "2-4 English keywords for the main subject",
-      "scene_keywords_en": ["4-7 English searches, one per visual scene, in the exact order of the narration; each must visibly represent the paragraph it accompanies"]
+      "scene_keywords_en": ["4-7 English stock-footage search phrases, one per visual scene, in the exact order of the narration. Each phrase MUST name a concrete, filmable subject that is actually mentioned in that part of the script (a specific animal, place, object, body part, or activity) — never a vague abstract word like 'mystery', 'ancient', or 'nature' on its own, since stock sites match those to random unrelated footage. Start each phrase with the topic's general subject (e.g. 'ancient egypt', 'deep ocean', 'human brain') then add the specific visual detail."]
     }
 
-    تعليمات إلزامية بخصوص الهوك (لا تتجاهلها):
+    تعليمات إلزامية بخصوص الهوك (لا تتجاهلها — هذا أهم جزء في الفيديو كله، لأن ضعفه
+    يعني أن المشاهد يكمل التمرير قبل أن يسمع الجملة الثانية):
     - hook_text يجب أن يكون دائماً سؤالاً غريباً بصيغة استفهامية حقيقية (وليس جملة إخبارية صادمة)، مثل: "لماذا لا تستطيع...؟" أو "ما السبب الحقيقي وراء...؟" أو "هل تعلم ماذا يحدث لو...؟".
     - لا تكشف الإجابة في hook_text إطلاقاً — الإجابة تأتي فقط داخل narration_script، بعد إعادة صياغة السؤال نفسه حرفياً في بدايته.
-    - تجنّب الأسئلة المستهلكة أو المتوقعة؛ اختر زاوية غريبة وغير شائعة حتى لو كان الموضوع نفسه معروفاً، بحيث يشعر المشاهد أنه *يجب* أن يعرف الإجابة.
+    - ممنوع أن يكون الهوك عاماً أو مجرداً. يجب أن يحتوي على تفصيل واحد ملموس ومحدد
+      (رقم، اسم، مكان، مقارنة، أو تناقض واضح) وليس صياغة فضفاضة؛ مثال على هوك مرفوض:
+      "هل تعلم شيئاً غريباً عن المحيطات؟" — لأنه لا يخلق فضولاً حقيقياً ويمكن تجاوزه
+      بسهولة. الهوك القوي يجعل المشاهد يشعر أن هناك تناقضاً أو خطأً منطقياً واضحاً
+      أمامه يجب حله فوراً (المفروض يحدث س، لكن الذي يحدث فعلياً هو عكسه تماماً — فلماذا؟).
+    - قبل تثبيت الهوك النهائي، اختبره بهذا السؤال: "هل هذا السؤال بالتحديد يوقف شخصاً
+      عن التمرير الآن، أم يمكن تخمين إجابته المتوقعة من صياغة السؤال نفسه؟" إن كانت
+      الإجابة متوقعة أو السؤال عاماً، أعد الصياغة من زاوية أكثر غرابة وتحديداً.
+    - تجنّب الأسئلة المستهلكة أو المتوقعة أو التي صيغت بأسلوب قريب من هوكات سابقة؛
+      اختر زاوية غريبة وغير شائعة حتى لو كان الموضوع نفسه معروفاً، بحيث يشعر المشاهد
+      أنه *يجب* أن يعرف الإجابة الآن وليس لاحقاً.
+
+    تعليمات إلزامية بخصوص تنويع الفئة (لا تتجاهلها):
+    - اختر قيمة category أولاً، قبل التفكير في الموضوع نفسه، وتأكد أنها ليست من
+      الفئات الممنوعة المذكورة في رسالة المستخدم (آخر الفئات المستخدمة).
+    - يُمنع أن تتكرر نفس الفئة في فيديوهين أو ثلاثة متتالية؛ إذا كانت "أسرار الفضاء
+      والمحيطات" أو "حقائق علمية صادمة" ضمن الفئات الممنوعة الآن، فاختر فئة مختلفة
+      تماماً حتى لو كانت أصعب أو أقل شيوعاً — الهدف تنويع حقيقي وليس تكراراً بصياغة مختلفة.
+
+    تعليمات إلزامية بخصوص المشاهد المرئية (لا تتجاهلها):
+    - كل عبارة في scene_keywords_en يجب أن تصف شيئاً مرئياً حقيقياً ومحدداً مذكوراً
+      فعلياً في نفس جزء النص الذي تقابله (حيوان بعينه، مكان بعينه، عضو من الجسم، أداة،
+      أو نشاط بعينه) — وليس كلمة عامة مجردة مثل "mystery" أو "ancient" أو "nature"
+      بمفردها، لأن هذه الكلمات تُرجع في مواقع الفيديو مقاطع عشوائية لا علاقة حقيقية
+      لها بموضوع الفيديو.
+    - ابدأ كل عبارة بالمجال العام للموضوع (مثل "ancient egypt" أو "deep ocean" أو
+      "human brain") ثم أضف التفصيل البصري المحدد بعده، حتى يسهل العثور على مقطع
+      فيديو حقيقي يطابق الموضوع فعلياً بدلاً من مقطع عام غير مرتبط.
 
     تعليمات إلزامية بخصوص الطول (لا تتجاهلها):
     - حقل narration_script يجب أن يحتوي من أول استجابة على 145-155 كلمة عربية؛ لا تكتب سكربتًا قصيرًا ثم تطلب منك إضافة كلمات لاحقًا.
-    - scene_keywords_en إلزامي ويجب أن يحتوي على 4-7 عبارات: كل عبارة يجب أن تمثل جزءاً محدداً من النص، ولا تستخدم كلمات عامة لا علاقة لها بالموضوع.
+    - scene_keywords_en إلزامي ويجب أن يحتوي على 4-7 عبارات مطابقة للشروط أعلاه.
     - عدّ الكلمات فعلياً قبل إنهاء الإجابة، ولا تُسلّم نصاً أطول أو أقصر من المطلوب.
 
     تعليمات إلزامية بخصوص التشكيل (لا تتجاهلها):
@@ -442,6 +514,7 @@ def generate_topic() -> Topic:
             hashtags=list(parsed.get("hashtags", [])),
             search_keywords_en=parsed.get("search_keywords_en", "nature abstract").strip(),
             scene_keywords_en=[str(x).strip() for x in parsed.get("scene_keywords_en", []) if str(x).strip()],
+            category=str(parsed.get("category", "")).strip(),
         )
         if not topic.hook_text:
             raise PipelineError("Groq returned an empty hook_text")
@@ -461,12 +534,20 @@ def generate_topic() -> Topic:
         return topic, len(topic.narration_script.split())
 
     def _call() -> Topic:
+        history = load_topic_history()
+        # Last 5 categories actually used (see TOPIC_CATEGORIES / remember_topic
+        # below) — sent to the model so it's forced to rotate domains instead
+        # of defaulting to whichever category is easiest (usually space/science),
+        # which is what caused the low topic-variety Ahmed flagged.
+        recent_categories = [h.get("category", "") for h in history[-5:] if h.get("category")]
         user_msg = (
             "أعطني فكرة فيديو جديدة بصيغة JSON كما هو محدد. "
             f"يجب أن يكون narration_script بين {MIN_SCRIPT_WORDS} و{MAX_SCRIPT_WORDS} كلمة، "
             "ويجب أن يحتوي scene_keywords_en على 4 إلى 7 مشاهد مرتبطة مباشرة بفقرات النص. "
             "لا تكرر أياً من الموضوعات السابقة التالية: "
-            + json.dumps([x.get("title", "") for x in load_topic_history()[-40:]], ensure_ascii=False)
+            + json.dumps([x.get("title", "") for x in history[-40:]], ensure_ascii=False)
+            + ". آخر الفئات (category) المستخدمة بالترتيب — ممنوع اختيار أي منها الآن، اختر فئة مختلفة تماماً: "
+            + json.dumps(recent_categories, ensure_ascii=False)
         )
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
@@ -475,16 +556,6 @@ def generate_topic() -> Topic:
         raw_text = _groq_chat(messages)
         topic, word_count = _parse_topic(raw_text)
 
-        if word_count < MIN_SCRIPT_WORDS:
-            log.warning(
-                "narration_script short (%d words); padding locally to %d words without another Groq request",
-                word_count, MIN_SCRIPT_WORDS,
-            )
-            topic.narration_script = _pad_script_locally(topic.narration_script, MIN_SCRIPT_WORDS)
-            word_count = len(topic.narration_script.split())
-            if word_count < MIN_SCRIPT_WORDS:
-                raise PipelineError(f"Could not locally pad narration_script to {MIN_SCRIPT_WORDS} words")
-
         if word_count > MAX_SCRIPT_WORDS:
             log.warning(
                 "narration_script too long (%d words > %d); trimming at a sentence boundary "
@@ -492,10 +563,32 @@ def generate_topic() -> Topic:
                 word_count, MAX_SCRIPT_WORDS,
             )
             topic.narration_script = _trim_script_to_word_limit(topic.narration_script, MAX_SCRIPT_WORDS)
+        elif word_count < MIN_SCRIPT_WORDS:
+            log.warning(
+                "narration_script short (%d words) before the outro; appending the fixed "
+                "engagement outro to close the gap",
+                word_count,
+            )
+
+        # Always close every video with the fixed subscribe/like/comment/bell
+        # outro (see CTA_OUTRO_VARIANTS) — not only when the script came up
+        # short, so this reliably shows up on every published video.
+        topic.narration_script = _append_engagement_outro(topic.narration_script, MIN_SCRIPT_WORDS)
+        word_count = len(topic.narration_script.split())
+        if word_count < MIN_SCRIPT_WORDS:
+            raise PipelineError(
+                f"narration_script only {word_count} words even after the engagement outro; "
+                "Groq output was too short"
+            )
 
         if len(topic.scene_keywords_en) < MIN_SCENE_CLIPS:
             raise PipelineError(
                 f"Groq returned fewer than {MIN_SCENE_CLIPS} scene keywords; visual/text alignment is required"
+            )
+        if topic.category and recent_categories and topic.category in recent_categories[-2:]:
+            raise PipelineError(
+                f"Generated category {topic.category!r} repeats one of the last 2 used categories "
+                f"{recent_categories[-2:]!r}; forcing a retry with a different domain"
             )
         if topic_is_too_similar(topic, load_topic_history()):
             raise PipelineError("Generated topic is too similar to a previously published topic")
@@ -530,8 +623,17 @@ def search_pexels_video(keywords: str) -> str:
         if not videos:
             raise PipelineError(f"No Pexels results for keywords: {keywords!r}")
 
-        random.shuffle(videos)
-        for video in videos:
+        # Only shuffle among the top N most-relevant results (Pexels returns
+        # them ranked by relevance already) instead of the entire page, so we
+        # never fall back to a loosely-related result ranked far down just
+        # because it happened to have a portrait file first. If none of the
+        # top candidates have a usable portrait file, fall through to the
+        # rest of the page (still in Pexels's original relevance order)
+        # rather than failing the scene outright.
+        top_candidates = videos[:TOP_RELEVANT_CANDIDATES]
+        random.shuffle(top_candidates)
+        ordered_videos = top_candidates + videos[TOP_RELEVANT_CANDIDATES:]
+        for video in ordered_videos:
             files = [
                 f for f in video.get("video_files", [])
                 if f.get("width") and f.get("height") and f["height"] > f["width"]
@@ -546,16 +648,33 @@ def search_pexels_video(keywords: str) -> str:
     return with_retries(_call, what="Pexels search")
 
 
-def search_pexels_videos(keywords_list: list[str]) -> list[str]:
-    """Fetch one portrait clip per semantic scene, avoiding duplicate URLs."""
+def search_pexels_videos(keywords_list: list[str], topic_context: str = "") -> list[str]:
+    """Fetch one portrait clip per semantic scene, avoiding duplicate URLs.
+
+    Each scene query is combined with the topic's own search_keywords_en
+    (e.g. "ancient egypt pyramids" + "stone carving") so Pexels doesn't just
+    match the scene keyword in isolation and pull back generic footage with
+    no real connection to the video's actual subject — the combined query
+    is tried first and only falls back to the bare scene keyword if it
+    returns nothing.
+    """
     urls: list[str] = []
     for keywords in keywords_list:
+        combined = f"{topic_context} {keywords}".strip() if topic_context else keywords
         try:
-            url = search_pexels_video(keywords)
-            if url not in urls:
-                urls.append(url)
-        except PipelineError as exc:
-            log.warning("No clip for scene %r: %s", keywords, exc)
+            url = search_pexels_video(combined)
+        except PipelineError:
+            if combined == keywords:
+                log.warning("No clip for scene %r", keywords)
+                continue
+            log.warning("No results for %r; retrying with scene keywords alone: %r", combined, keywords)
+            try:
+                url = search_pexels_video(keywords)
+            except PipelineError as exc:
+                log.warning("No clip for scene %r: %s", keywords, exc)
+                continue
+        if url not in urls:
+            urls.append(url)
     if len(urls) < MIN_SCENE_CLIPS:
         raise PipelineError(
             f"Only {len(urls)} distinct scene clips found; need at least {MIN_SCENE_CLIPS} "
@@ -1265,7 +1384,7 @@ def run_pipeline() -> None:
         # a reason to spend another Groq request or risk topic repetition.
 
     remember_topic(topic)
-    scene_urls = search_pexels_videos(topic.scene_keywords_en)
+    scene_urls = search_pexels_videos(topic.scene_keywords_en, topic.search_keywords_en)
     scene_paths = [download_file(url, run_dir / f"scene_{i:02d}.mp4") for i, url in enumerate(scene_urls)]
     bg_video_path = build_multishot_background(scene_paths, audio_duration, run_dir / "background.mp4")
     music_path = get_bg_music(run_dir)
