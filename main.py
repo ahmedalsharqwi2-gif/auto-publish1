@@ -1013,6 +1013,124 @@ def normalize_narration_duration(audio_path: Path, target_seconds: float) -> flo
     return final_duration
 
 
+# ---------------------------------------------------------------------------
+# Step 3b: Force-align subtitles to the actual rendered audio (Whisper)
+# ---------------------------------------------------------------------------
+# edge-tts self-reports "WordBoundary" timings while it synthesizes speech,
+# and build_subtitles used to trust those numbers directly. In production
+# this drifted badly: Azure's Arabic neural voices do not report per-word
+# timing reliably, and the more tashkeel the input text carries (needed for
+# correct pronunciation — see CTA_OUTRO_VARIANTS / SYSTEM_PROMPT), the more
+# those self-reported boundaries can be off, with the error compounding
+# over a ~90-second video until the captions are visibly out of sync with
+# what's actually being said.
+#
+# align_words_with_whisper() replaces that self-reported metadata with an
+# independent, ground-truth measurement: it runs speech recognition
+# (faster-whisper) on the ACTUAL final audio waveform and reads back real
+# start/end times for each recognized word. Whisper's own transcription is
+# only ever used to obtain timestamps — the words displayed and spoken
+# always remain the original, tashkeel-bearing script text. Because
+# Whisper's Arabic transcription has no diacritics and can occasionally
+# mis-hear a word, its output is diff-aligned (tashkeel/diacritic-
+# insensitive) against our own known script word-by-word; any script word
+# that doesn't confidently match gets an interpolated timestamp from its
+# nearest matched neighbours, so every word still ends up with a timing.
+WHISPER_MODEL_SIZE = os.getenv("WHISPER_MODEL", "base")
+
+
+def align_words_with_whisper(audio_path: Path, script_words: list[str]) -> list[dict[str, Any]]:
+    from faster_whisper import WhisperModel  # imported lazily; heavy optional dependency
+
+    log.info("Force-aligning subtitles to the rendered audio with Whisper (%s)...", WHISPER_MODEL_SIZE)
+    model = WhisperModel(WHISPER_MODEL_SIZE, device="cpu", compute_type="int8")
+    segments, _ = model.transcribe(
+        str(audio_path), language="ar", word_timestamps=True, vad_filter=False,
+    )
+
+    whisper_words: list[tuple[str, float, float]] = []
+    for segment in segments:
+        for w in (segment.words or []):
+            text = (w.word or "").strip()
+            if text:
+                whisper_words.append((text, float(w.start), float(w.end)))
+    if not whisper_words:
+        raise PipelineError("Whisper produced no word-level timestamps")
+
+    def _norm(w: str) -> str:
+        return _normalize_for_compare(w).strip(" ،.!؟\u061F").lower()
+
+    script_norm = [_norm(w) for w in script_words]
+    whisper_norm = [_norm(w) for w, _, _ in whisper_words]
+
+    matcher = difflib.SequenceMatcher(None, script_norm, whisper_norm, autojunk=False)
+    timings: list[dict[str, Any] | None] = [None] * len(script_words)
+    for _tag, i1, i2, j1, j2 in matcher.get_matching_blocks():
+        for k in range(i2 - i1):
+            if i1 + k >= len(script_words) or j1 + k >= len(whisper_words):
+                continue
+            _, start, end = whisper_words[j1 + k]
+            timings[i1 + k] = {
+                "text": script_words[i1 + k],
+                "offset": start,
+                "duration": max(end - start, 0.05),
+            }
+
+    known_indices = [i for i, t in enumerate(timings) if t is not None]
+    if not known_indices:
+        raise PipelineError("Could not align any script words against the Whisper transcript")
+    if len(known_indices) < len(script_words) * 0.5:
+        raise PipelineError(
+            f"Only {len(known_indices)}/{len(script_words)} script words matched the Whisper "
+            "transcript; alignment is too unreliable to trust for this run"
+        )
+
+    # Interpolate the handful of words Whisper didn't confidently match, so
+    # every script word still ends up with a usable timestamp.
+    for i in range(len(timings)):
+        if timings[i] is not None:
+            continue
+        prev_i = max((k for k in known_indices if k < i), default=None)
+        next_i = min((k for k in known_indices if k > i), default=None)
+        if prev_i is None:
+            base = timings[next_i]
+            offset = max(base["offset"] - 0.2 * (next_i - i), 0.0)
+        elif next_i is None:
+            base = timings[prev_i]
+            offset = base["offset"] + base["duration"] * (i - prev_i)
+        else:
+            prev_end = timings[prev_i]["offset"] + timings[prev_i]["duration"]
+            next_start = timings[next_i]["offset"]
+            span = max(next_start - prev_end, 0.05)
+            offset = prev_end + span * (i - prev_i) / (next_i - prev_i)
+        timings[i] = {"text": script_words[i], "offset": offset, "duration": 0.3}
+
+    log.info(
+        "Whisper alignment: %d/%d script words matched directly, %d interpolated",
+        len(known_indices), len(script_words), len(script_words) - len(known_indices),
+    )
+    return timings  # type: ignore[return-value]
+
+
+def realign_subtitles_with_whisper(narration_path: Path, script_text: str) -> None:
+    """Best-effort: overwrite narration_path's .timings.json with
+    Whisper-derived timings. Never raises — if Whisper isn't installed, the
+    model can't be fetched (e.g. no network), or alignment quality is too
+    low, the existing edge-tts timings are left in place and the pipeline
+    continues rather than failing the whole run over a subtitle-quality
+    enhancement."""
+    timings_path = narration_path.with_suffix(".timings.json")
+    try:
+        aligned = align_words_with_whisper(narration_path, script_text.split())
+        timings_path.write_text(json.dumps(aligned, ensure_ascii=False), encoding="utf-8")
+        log.info("Whisper-aligned timings written to %s", timings_path)
+    except Exception as exc:  # noqa: BLE001
+        log.warning(
+            "Whisper alignment failed (%s); falling back to edge-tts's own word timings for subtitles",
+            exc,
+        )
+
+
 def _ass_escape(text: str) -> str:
     """Strip characters that have special meaning inside an ASS Dialogue
     Text field: '{' / '}' open/close an override block, and a raw newline
@@ -1510,6 +1628,13 @@ def run_pipeline() -> None:
             )
         # Keep the same topic; a duration mismatch is a voice-speed issue, not
         # a reason to spend another Groq request or risk topic repetition.
+
+    # Re-derive word timings from the actual final audio (Whisper) instead of
+    # trusting edge-tts's own self-reported WordBoundary metadata — see
+    # realign_subtitles_with_whisper's docstring for why. Must run after any
+    # atempo speed correction above, so it aligns against the exact audio
+    # that will be published.
+    realign_subtitles_with_whisper(narration_path, topic.narration_script)
 
     remember_topic(topic)
     scene_urls = search_pexels_videos(topic.scene_keywords_en, topic.search_keywords_en)
