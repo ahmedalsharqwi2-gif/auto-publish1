@@ -409,7 +409,7 @@ SYSTEM_PROMPT = textwrap.dedent(
       "title": "عنوان جذاب قصير بالعربية",
       "caption": "كابشن للمنشور بالعربية، 1-3 جمل",
       "hashtags": ["#وسم1", "#وسم2", "#وسم3", "#وسم4", "#وسم5"],
-      "search_keywords_en": "2-4 English keywords for the main subject",
+      "search_keywords_en": "SHORT general-subject phrase in 2-3 simple English words ONLY (e.g. 'ancient egypt', 'deep ocean', 'human brain sleep'). Never a comma-separated list of synonyms (e.g. NEVER 'human sleep, prolonged sleep, hypersomnia') — this exact string is prefixed to every scene search below, so a long or repetitive value makes all scene searches look identical to the stock-video engine and return duplicate clips.",
       "scene_keywords_en": ["4-7 English stock-footage search phrases, one per visual scene, in the exact order of the narration. Each phrase MUST name a concrete, filmable subject that is actually mentioned in that part of the script (a specific animal, place, object, body part, or activity) — never a vague abstract word like 'mystery', 'ancient', or 'nature' on its own, since stock sites match those to random unrelated footage. Start each phrase with the topic's general subject (e.g. 'ancient egypt', 'deep ocean', 'human brain') then add the specific visual detail."]
     }
 
@@ -457,6 +457,13 @@ SYSTEM_PROMPT = textwrap.dedent(
     - ابدأ كل عبارة بالمجال العام للموضوع (مثل "ancient egypt" أو "deep ocean" أو
       "human brain") ثم أضف التفصيل البصري المحدد بعده، حتى يسهل العثور على مقطع
       فيديو حقيقي يطابق الموضوع فعلياً بدلاً من مقطع عام غير مرتبط.
+    - حقل search_keywords_en يجب أن يكون عبارة قصيرة واحدة من كلمتين إلى ثلاث
+      كلمات بسيطة فقط (مثل "human brain sleep")، وليس قائمة مرادفات مفصولة
+      بفواصل (مثال مرفوض تماماً: "human sleep, prolonged sleep, hypersomnia").
+      هذه العبارة تُضاف تلقائياً في بداية كل استعلام بحث لكل مشهد، فإذا كانت
+      طويلة أو متكررة الكلمات فسيبدو كل استعلام مشهد مطابقاً تقريباً لباقي
+      الاستعلامات في نظر محرك بحث الفيديو، فيرجع نفس المقاطع لمشاهد مختلفة
+      بدل مقاطع متنوعة.
 
     تعليمات إلزامية بخصوص الطول (لا تتجاهلها):
     - حقل narration_script يجب أن يحتوي من أول استجابة على 145-155 كلمة عربية؛ لا تكتب سكربتًا قصيرًا ثم تطلب منك إضافة كلمات لاحقًا.
@@ -619,8 +626,9 @@ def generate_topic() -> Topic:
 # Step 2: Background footage (Pexels)
 # ---------------------------------------------------------------------------
 
-def search_pexels_video(keywords: str) -> str:
+def search_pexels_video(keywords: str, exclude: set[str] | None = None) -> str:
     log.info("Searching Pexels for vertical footage: %r", keywords)
+    exclude = exclude or set()
 
     def _call() -> str:
         resp = requests.get(
@@ -655,8 +663,24 @@ def search_pexels_video(keywords: str) -> str:
                 continue
             files.sort(key=lambda f: f["width"], reverse=True)
             best = files[0]
+            # Similar scene queries (e.g. all prefixed with the same
+            # search_keywords_en context) frequently rank the same handful
+            # of Pexels videos at the top for every single scene. Returning
+            # the first portrait match unconditionally meant several scenes
+            # could silently resolve to the exact same clip, which then
+            # collapsed to fewer than MIN_SCENE_CLIPS distinct URLs once
+            # de-duplicated in search_pexels_videos — failing the whole run
+            # even though Pexels actually had enough different videos
+            # further down the same results page. Skipping anything already
+            # used by an earlier scene keeps walking down the ranked list
+            # instead of failing later on a duplicate.
+            if best["link"] in exclude:
+                continue
             return best["link"]
-        raise PipelineError("No portrait-orientation video files found in Pexels results")
+        raise PipelineError(
+            "No usable portrait-orientation video found in Pexels results "
+            "(either none had a portrait file, or all were already used by another scene)"
+        )
 
     return with_retries(_call, what="Pexels search")
 
@@ -669,20 +693,24 @@ def search_pexels_videos(keywords_list: list[str], topic_context: str = "") -> l
     match the scene keyword in isolation and pull back generic footage with
     no real connection to the video's actual subject — the combined query
     is tried first and only falls back to the bare scene keyword if it
-    returns nothing.
+    returns nothing. Already-picked URLs are passed as `exclude` to every
+    call so that scene queries which happen to look similar to Pexels (e.g.
+    because topic_context is long or repetitive) can't silently collapse
+    onto the same handful of clips — search_pexels_video keeps walking down
+    the ranked results instead of returning a duplicate.
     """
     urls: list[str] = []
     for keywords in keywords_list:
         combined = f"{topic_context} {keywords}".strip() if topic_context else keywords
         try:
-            url = search_pexels_video(combined)
+            url = search_pexels_video(combined, exclude=set(urls))
         except PipelineError:
             if combined == keywords:
                 log.warning("No clip for scene %r", keywords)
                 continue
             log.warning("No results for %r; retrying with scene keywords alone: %r", combined, keywords)
             try:
-                url = search_pexels_video(keywords)
+                url = search_pexels_video(keywords, exclude=set(urls))
             except PipelineError as exc:
                 log.warning("No clip for scene %r: %s", keywords, exc)
                 continue
