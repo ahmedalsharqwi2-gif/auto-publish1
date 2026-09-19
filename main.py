@@ -273,9 +273,24 @@ def _trim_script_to_word_limit(script: str, max_words: int) -> str:
 # subtitles; exactly ONE of the two is picked at random each run (see
 # _append_engagement_outro) — never both. Each asks for a like + subscribe,
 # one of the two comment prompts, and a bell-notification reminder.
+#
+# Tashkeel here is deliberately targeted rather than exhaustive: full
+# desinential (i'raab) marks on every word would clutter the on-screen
+# captions for no benefit, but a few specific spots reliably mispronounce
+# without ANY diacritic and need one regardless of the "light tashkeel"
+# rule elsewhere:
+#   - attached pronoun suffixes (ـكَ) — otherwise edge-tts guesses a vowel
+#     and often gets gender/case wrong
+#   - "زر" (button) is a homograph with "زُر" (imperative of "to visit");
+#     undiacritized it is frequently read as the wrong word entirely, so it
+#     is always spelled زِرّ/زِرَّ/زِرِّ (per its case) here
+#   - the Form VIII imperative "اشترك" (subscribe) needs its short vowels
+#     marked (اشْتَرِكْ) or it can be read as a different verb form
+#   - the jussive "لا تَنْسَ" needs its vowels marked so it isn't read as
+#     the indicative "لا تنسى"
 CTA_OUTRO_VARIANTS = [
-    "إن أعجبك هذا الفيديو فلا تنسَ الإعجاب به والاشتراك في القناة، وأخبرنا في التعليقات: هل كانت هذه المعلومة جديدة عليك؟ ولا تنسَ تفعيل زر الجرس ليصلك كل جديد.",
-    "اضغط زر الإعجاب واشترك في القناة إن استفدت من هذا الفيديو، واكتب لنا في التعليقات الموضوع الذي تريد أن نتحدث عنه في الفيديو القادم، ولا تنسَ تفعيل زر الجرس لتكون أول من يعلم.",
+    "إنْ أَعْجَبَكَ هذا الفيديو فلا تَنْسَ الإعجابَ به والاشتراكَ في القناة، وأخبِرْنا في التعليقات: هل كانت هذه المعلومة جديدة عليك؟ ولا تَنْسَ تفعيل زِرِّ الجرس ليصلَك كل جديد.",
+    "اضغط زِرَّ الإعجاب واشْتَرِكْ في القناة إن استفدت من هذا الفيديو، واكتب لنا في التعليقات الموضوع الذي تريد أن نتحدث عنه في الفيديو القادم، ولا تَنْسَ تفعيل زِرِّ الجرس لتكون أول من يعلم.",
 ]
 
 
@@ -477,6 +492,18 @@ SYSTEM_PROMPT = textwrap.dedent(
     - استخدم تشكيلاً جزئياً وخفيفاً (Selective/Light Tashkeel) فقط في المواضع التي قد يلتبس نطقها أو معناها بدون تشكيل (كلمات متشابهة رسماً ومختلفة نطقاً، أفعال قد تُقرأ بأكثر من صيغة، كلمات نادرة، إلخ).
     - لا تضع تشكيلاً على كل حرف في كل كلمة — هذا غير مطلوب، ويجعل الترجمة النصية الظاهرة على الشاشة مزدحمة بصرياً دون داعٍ.
     - اترك الكلمات الواضحة النطق بدون أي تشكيل، وتجنّب تشكيل أواخر الكلمات إعرابياً إلا إذا كان ضرورياً فعلاً لتفادي التباس حقيقي في المعنى أو النطق.
+    - على الرغم من القاعدة العامة أعلاه، هذه المواضع بالتحديد يجب أن تُشكَّل دائماً
+      لأن نطقها الخاطئ بلا تشكيل أصبح ملحوظاً في الإنتاج الفعلي:
+        • الضمائر المتصلة بآخر الفعل أو الاسم (ـكَ، ـهُ، ـهَا، ـكُمْ...) — بدون
+          حركة على الضمير المتصل يخمّن محرك النطق حركة عشوائية فتُنطق الكلمة
+          بجنس أو حالة خاطئة.
+        • أي كلمة تتشابه رسماً مع كلمة أخرى مختلفة تماماً في المعنى والنطق
+          (مثال: "زر" بمعنى الزرّ/الضغطة، والتي قد تُقرأ خطأً كفعل أمر من
+          "زار" بدون تشكيل) — شكّلها دائماً بالكامل بحركاتها الصحيحة.
+        • صيغة الأمر والمضارع المجزوم للأفعال التي قد تُقرأ بأكثر من صيغة
+          (مثل "اشترك" في الأمر، أو "لا تَنْسَ" في النهي) — ضع الحركات
+          القصيرة على أحرفها لضمان النطق الصحيح لصيغة الأمر/النهي تحديداً لا
+          صيغة أخرى.
     """
 ).strip()
 
@@ -724,19 +751,79 @@ def search_pexels_videos(keywords_list: list[str], topic_context: str = "") -> l
     return urls
 
 
-def build_multishot_background(clips: list[Path], duration: float, out_path: Path) -> Path:
-    """Create a sequence of distinct portrait shots covering the narration duration."""
-    segment = duration / len(clips)
+def _load_word_timings(timings_path: Path) -> list[dict[str, Any]]:
+    if not timings_path.exists():
+        return []
+    try:
+        data = json.loads(timings_path.read_text(encoding="utf-8"))
+        return data if isinstance(data, list) else []
+    except (OSError, json.JSONDecodeError):
+        return []
+
+
+def compute_scene_durations(timings: list[dict[str, Any]], total_duration: float, n_scenes: int) -> list[float]:
+    """Return n_scenes segment durations (summing to total_duration) for the
+    background-video cuts, with each cut point snapped to a real TTS word
+    boundary — and nudged onto the nearest sentence-ending pause when one is
+    close by — instead of a blind equal-time split.
+
+    A pure `total_duration / n_scenes` split (the previous behaviour) cuts
+    to the next visual scene at an arbitrary instant that has no relation to
+    what is actually being said at that moment, which is why the footage
+    could feel out of sync with the narration even though the *audio* itself
+    was perfectly in sync. Snapping cuts to word starts means a visual
+    change never lands mid-word, and preferring a nearby sentence-ending
+    boundary (a natural speaking pause) makes the cut coincide with a real
+    beat in the narration whenever one is available.
+    """
+    if n_scenes <= 1:
+        return [total_duration]
+    words = [w for w in timings if w.get("text")]
+    if not words:
+        # No timing data available (e.g. TTS didn't report word boundaries) —
+        # fall back to the old equal split rather than failing the run.
+        even = total_duration / n_scenes
+        return [even] * n_scenes
+
+    offsets = [max(float(w.get("offset", 0)), 0.0) for w in words]
+    texts = [str(w.get("text", "")) for w in words]
+    ideal_points = [total_duration * i / n_scenes for i in range(1, n_scenes)]
+    # How far from the ideal, equal-split point we're willing to look for a
+    # better (word- or sentence-boundary) cut point.
+    window = max(total_duration / n_scenes * 0.4, 1.0)
+
+    cut_points: list[float] = []
+    for ideal in ideal_points:
+        nearby = [o for o in offsets if abs(o - ideal) <= window]
+        if not nearby:
+            cut_points.append(ideal)
+            continue
+        sentence_ends = [
+            o for o, t in zip(offsets, texts)
+            if abs(o - ideal) <= window and t[-1:] in "؟?.!،"
+        ]
+        chosen = min(sentence_ends or nearby, key=lambda o: abs(o - ideal))
+        cut_points.append(chosen)
+
+    cut_points = sorted(cut_points)
+    bounds = [0.0] + cut_points + [total_duration]
+    return [max(bounds[i + 1] - bounds[i], 0.3) for i in range(n_scenes)]
+
+
+def build_multishot_background(clips: list[Path], segment_durations: list[float], out_path: Path) -> Path:
+    """Create a sequence of distinct portrait shots, one per clip, each held
+    for its own segment_durations[i] seconds (see compute_scene_durations —
+    these no longer need to be equal-length)."""
     inputs: list[str] = []
     filters: list[str] = []
-    for i, clip in enumerate(clips):
+    for i, (clip, segment) in enumerate(zip(clips, segment_durations)):
         inputs += ["-stream_loop", "-1", "-i", str(clip)]
         filters.append(
             f"[{i}:v]trim=duration={segment:.3f},setpts=PTS-STARTPTS,"
             f"scale={VIDEO_W}:{VIDEO_H}:force_original_aspect_ratio=increase,crop={VIDEO_W}:{VIDEO_H},fps=30[v{i}]"
         )
-    filters.append("".join(f"[v{i}]" for i in range(len(clips))) +
-                   f"concat=n={len(clips)}:v=1:a=0[outv]")
+    filters.append("".join(f"[v{i}]" for i in range(len(segment_durations))) +
+                   f"concat=n={len(segment_durations)}:v=1:a=0[outv]")
     cmd = ["ffmpeg", "-y", *inputs, "-filter_complex", ";".join(filters),
            "-map", "[outv]", "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
            "-an", str(out_path)]
@@ -1427,7 +1514,9 @@ def run_pipeline() -> None:
     remember_topic(topic)
     scene_urls = search_pexels_videos(topic.scene_keywords_en, topic.search_keywords_en)
     scene_paths = [download_file(url, run_dir / f"scene_{i:02d}.mp4") for i, url in enumerate(scene_urls)]
-    bg_video_path = build_multishot_background(scene_paths, audio_duration, run_dir / "background.mp4")
+    word_timings = _load_word_timings(narration_path.with_suffix(".timings.json"))
+    segment_durations = compute_scene_durations(word_timings, audio_duration, len(scene_paths))
+    bg_video_path = build_multishot_background(scene_paths, segment_durations, run_dir / "background.mp4")
     music_path = get_bg_music(run_dir)
 
     subtitle_path = build_subtitles(
