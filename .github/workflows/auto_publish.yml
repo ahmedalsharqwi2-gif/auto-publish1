@@ -26,10 +26,10 @@ jobs:
           echo "Cairo local time: $(date '+%Y-%m-%d %H:%M:%S %Z')"
 
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.11'
 
@@ -52,8 +52,8 @@ jobs:
           MIN_AUDIO_SECONDS: '85'
           MAX_AUDIO_SECONDS: '89'
           TARGET_AUDIO_SECONDS: '87'
-          MIN_SCRIPT_WORDS: '145'
-          MAX_SCRIPT_WORDS: '155'
+          MIN_SCRIPT_WORDS: '135'
+          MAX_SCRIPT_WORDS: '165'
           MIN_SCENE_CLIPS: '4'
           TOPIC_HISTORY_FILE: 'topic_history.json'
         run: |
