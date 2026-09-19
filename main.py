@@ -266,33 +266,30 @@ def _trim_script_to_word_limit(script: str, max_words: int) -> str:
 # Fixed engagement outro appended to the end of EVERY narration_script (both
 # spoken by the TTS voice and shown as subtitles) — replaces the old
 # generic, content-free filler sentences that used to appear only when a
-# Groq response came up short. Two variants, picked at random, so
-# consecutive videos don't end on identical audio/subtitles; both ask for a
-# like + subscribe, one of the two comment prompts, and a bell-notification
-# reminder.
+# Groq response came up short. Written in Modern Standard Arabic (فصحى)
+# rather than Egyptian colloquial so the TTS voice pronounces every word
+# correctly and consistently, matching the rest of the narration. Two
+# variants exist so consecutive videos don't end on identical audio/
+# subtitles; exactly ONE of the two is picked at random each run (see
+# _append_engagement_outro) — never both. Each asks for a like + subscribe,
+# one of the two comment prompts, and a bell-notification reminder.
 CTA_OUTRO_VARIANTS = [
-    "لو الفيديو عجبك متنساش تعمله لايك وتشترك في القناة، وقولّي في الكومنتات هل هذه المعلومة أول مرة تعرفها؟ ومتنساش تفعّل زر الجرس عشان يوصلك كل جديد.",
-    "اضغط لايك واشترك في القناة لو استفدت من الفيديو، واكتب لنا في الكومنتات عايز تعرف إيه في الفيديو الجاي، وفعّل الجرس عشان تكون أول واحد يعرف.",
+    "إن أعجبك هذا الفيديو فلا تنسَ الإعجاب به والاشتراك في القناة، وأخبرنا في التعليقات: هل كانت هذه المعلومة جديدة عليك؟ ولا تنسَ تفعيل زر الجرس ليصلك كل جديد.",
+    "اضغط زر الإعجاب واشترك في القناة إن استفدت من هذا الفيديو، واكتب لنا في التعليقات الموضوع الذي تريد أن نتحدث عنه في الفيديو القادم، ولا تنسَ تفعيل زر الجرس لتكون أول من يعلم.",
 ]
 
 
 def _append_engagement_outro(script: str, min_words: int) -> str:
-    """Append the fixed subscribe/like/comment/bell call-to-action to the
-    end of every narration_script — always, not only when the script came
-    up short.
-
-    Also doubles as the safety-net padding for a short Groq response: if
-    the script is still under min_words after one outro variant, a second
-    (different) variant is appended too — the same role the old generic
-    filler sentences played, but now with on-brand content instead of
-    empty padding.
+    """Append exactly ONE randomly chosen subscribe/like/comment/bell
+    call-to-action (see CTA_OUTRO_VARIANTS) to the end of every
+    narration_script — never more than one, even if the script is still
+    short of min_words afterward. A short script is a Groq-output problem
+    to be fixed by retrying topic generation (see generate_topic), not by
+    padding the ending with a second, redundant outro sentence.
     """
     words = script.split()
-    variants = random.sample(CTA_OUTRO_VARIANTS, k=len(CTA_OUTRO_VARIANTS))
-    for i, variant in enumerate(variants):
-        if i > 0 and len(words) >= min_words:
-            break
-        words.extend(variant.split())
+    variant = random.choice(CTA_OUTRO_VARIANTS)
+    words.extend(variant.split())
     return " ".join(words)
 
 
@@ -407,7 +404,7 @@ SYSTEM_PROMPT = textwrap.dedent(
 
     {
       "category": "اختر فئة واحدة فقط بالضبط من هذه القائمة (انسخ النص كما هو): غرائب دينية موثقة / عجائب عالم الحيوان / غرائب جسم الإنسان والطب / حقائق علمية صادمة / أسرار الفضاء والمحيطات / ظواهر طبيعية نادرة / قصص تاريخية غريبة / حضارات وعادات وثقافات غير مألوفة / اختراعات وظواهر تقنية / أماكن غامضة / حقائق نفسية واجتماعية — بشرط ألا تكون من الفئات الممنوعة المذكورة في رسالة المستخدم",
-      "hook_text": "سؤال واحد فقط، غريب وغير متوقع ومثير للفضول، بالعربية الفصحى المبسطة، يُفتتح به الفيديو. يجب أن يُصاغ حرفياً كسؤال ينتهي بعلامة استفهام (؟)، ولا يكشف الإجابة إطلاقاً، ولا يتجاوز 15 كلمة. الهدف الوحيد منه أن يجعل المشاهد غير قادر على تجاوز الفيديو قبل معرفة الإجابة. استخدم تشكيلاً جزئياً وخفيفاً فقط (وليس تشكيلاً كاملاً) في المواضع التي قد يلتبس نطقها بدونه",
+      "hook_text": "سؤال واحد فقط، غريب وغير متوقع ومثير للفضول، بالعربية الفصحى المبسطة، يُفتتح به الفيديو. يجب أن يُصاغ حرفياً كسؤال ينتهي بعلامة استفهام (؟)، ولا يكشف الإجابة إطلاقاً، ولا يتجاوز 12 كلمة. الهدف الوحيد منه أن يجعل المشاهد غير قادر على تجاوز الفيديو قبل معرفة الإجابة. استخدم تشكيلاً جزئياً وخفيفاً فقط (وليس تشكيلاً كاملاً) في المواضع التي قد يلتبس نطقها بدونه",
       "narration_script": "السكريبت الكامل الذي سيُروى بصوت التعليق ويظهر كترجمة على الفيديو. يبدأ بـ hook_text حرفياً ثم يجيب عنه بتفاصيل موثوقة ومثيرة في فقرات مترابطة، وينتهي بخاتمة قصيرة. يجب أن يكون بين 145 و155 كلمة عربية من أول استجابة، ويفضل 145 كلمة، لإنتاج فيديو بين 85 و89 ثانية دون تجاوز 90 ثانية، مقسم إلى جمل قصيرة واضحة.",
       "title": "عنوان جذاب قصير بالعربية",
       "caption": "كابشن للمنشور بالعربية، 1-3 جمل",
@@ -416,21 +413,33 @@ SYSTEM_PROMPT = textwrap.dedent(
       "scene_keywords_en": ["4-7 English stock-footage search phrases, one per visual scene, in the exact order of the narration. Each phrase MUST name a concrete, filmable subject that is actually mentioned in that part of the script (a specific animal, place, object, body part, or activity) — never a vague abstract word like 'mystery', 'ancient', or 'nature' on its own, since stock sites match those to random unrelated footage. Start each phrase with the topic's general subject (e.g. 'ancient egypt', 'deep ocean', 'human brain') then add the specific visual detail."]
     }
 
-    تعليمات إلزامية بخصوص الهوك (لا تتجاهلها — هذا أهم جزء في الفيديو كله، لأن ضعفه
-    يعني أن المشاهد يكمل التمرير قبل أن يسمع الجملة الثانية):
-    - hook_text يجب أن يكون دائماً سؤالاً غريباً بصيغة استفهامية حقيقية (وليس جملة إخبارية صادمة)، مثل: "لماذا لا تستطيع...؟" أو "ما السبب الحقيقي وراء...؟" أو "هل تعلم ماذا يحدث لو...؟".
-    - لا تكشف الإجابة في hook_text إطلاقاً — الإجابة تأتي فقط داخل narration_script، بعد إعادة صياغة السؤال نفسه حرفياً في بدايته.
-    - ممنوع أن يكون الهوك عاماً أو مجرداً. يجب أن يحتوي على تفصيل واحد ملموس ومحدد
-      (رقم، اسم، مكان، مقارنة، أو تناقض واضح) وليس صياغة فضفاضة؛ مثال على هوك مرفوض:
-      "هل تعلم شيئاً غريباً عن المحيطات؟" — لأنه لا يخلق فضولاً حقيقياً ويمكن تجاوزه
-      بسهولة. الهوك القوي يجعل المشاهد يشعر أن هناك تناقضاً أو خطأً منطقياً واضحاً
-      أمامه يجب حله فوراً (المفروض يحدث س، لكن الذي يحدث فعلياً هو عكسه تماماً — فلماذا؟).
-    - قبل تثبيت الهوك النهائي، اختبره بهذا السؤال: "هل هذا السؤال بالتحديد يوقف شخصاً
-      عن التمرير الآن، أم يمكن تخمين إجابته المتوقعة من صياغة السؤال نفسه؟" إن كانت
-      الإجابة متوقعة أو السؤال عاماً، أعد الصياغة من زاوية أكثر غرابة وتحديداً.
-    - تجنّب الأسئلة المستهلكة أو المتوقعة أو التي صيغت بأسلوب قريب من هوكات سابقة؛
-      اختر زاوية غريبة وغير شائعة حتى لو كان الموضوع نفسه معروفاً، بحيث يشعر المشاهد
-      أنه *يجب* أن يعرف الإجابة الآن وليس لاحقاً.
+    تعليمات إلزامية بخصوص الهوك (لا تتجاهلها إطلاقاً — هذا أهم جزء في الفيديو كله؛
+    فحتى الآن الهوكات المُنتَجة ضعيفة ولا تمنع المشاهد من الاستمرار في التمرير، وهذا
+    يعني فشل الفيديو بالكامل بصرف النظر عن جودة بقية المحتوى):
+
+    - الحد الأقصى 12 كلمة فقط، وليس 15 — كلما قصُر الهوك وارتفعت كثافته المعلوماتية
+      زاد أثره. لا تستخدم أي كلمة زائدة لا تخدم الصدمة أو الفضول مباشرة.
+    - يُمنع منعاً باتاً البدء بصيغة "هل تعلم" أو "هل تعلم أن" أو أي صيغة مشابهة —
+      هذه الصيغة مستهلكة تماماً وأصبحت إشارة للمشاهد لتجاوز الفيديو فوراً.
+    - يُمنع أن يكون الهوك سؤالاً عاماً أو مجرداً بلا تفصيل ملموس. يجب أن يحتوي
+      الهوك نفسه (وليس الشرح اللاحق) على تفصيل واحد محدد وملموس داخل صياغته:
+      رقم دقيق، اسم علم (كائن/مكان/شخصية)، أو مقارنة صادمة بين طرفين. مثال على
+      هوك مرفوض لأنه فضفاض: "هل تعلم شيئاً غريباً عن المحيطات؟". مثال على بنية
+      مقبولة (بنية التناقض): صياغة تضع المتوقع منطقياً مقابل الحقيقة الفعلية
+      المعاكسة تماماً في الجملة نفسها، بحيث يشعر القارئ أن هناك خطأً منطقياً
+      أمامه يجب حله فوراً — لا أن يُترك الأمر لشرح لاحق في السكريبت.
+    - اجعل الهوك يفتح "فجوة معرفية" (Curiosity Gap) حقيقية: صغ السؤال بحيث تكون
+      الإجابة المتوقَّعة من القارئ نفسه خاطئة تماماً، فيضطر لمشاهدة بقية الفيديو
+      لتصحيح افتراضه، لا لمجرد إشباع فضول عام.
+    - قبل تثبيت الهوك النهائي، طبّق اختبار "الثانية الثالثة" بصرامة: اقرأ الهوك
+      وحده بمعزل عن باقي السكريبت، واسأل: "هل هذه الصياغة بالذات تجعل شخصاً
+      يتوقف فوراً عن التمرير، أم يمكن تخمين اتجاه الإجابة من صياغة السؤال نفسه؟"
+      إذا كانت الإجابة متوقَّعة، أو الهوك يشبه في بنيته أي هوك مستهلك شائع، أعد
+      الصياغة بالكامل من زاوية أكثر غرابة وتحديداً قبل تسليم الإجابة النهائية —
+      لا تُسلّم أول صياغة تخطر ببالك.
+    - تجنّب كل الصيغ الجاهزة المكرورة ("هل تعلم"، "لن تصدق"، "الأمر الذي لا
+      يعرفه أحد") — اكتب الهوك دائماً كسؤال استفهامي طبيعي فيه تفصيل حقيقي
+      ومحدد يخصّ موضوع هذا الفيديو تحديداً، لا صياغة عامة تصلح لأي موضوع آخر.
 
     تعليمات إلزامية بخصوص تنويع الفئة (لا تتجاهلها):
     - اختر قيمة category أولاً، قبل التفكير في الموضوع نفسه، وتأكد أنها ليست من
@@ -454,7 +463,10 @@ SYSTEM_PROMPT = textwrap.dedent(
     - scene_keywords_en إلزامي ويجب أن يحتوي على 4-7 عبارات مطابقة للشروط أعلاه.
     - عدّ الكلمات فعلياً قبل إنهاء الإجابة، ولا تُسلّم نصاً أطول أو أقصر من المطلوب.
 
-    تعليمات إلزامية بخصوص التشكيل (لا تتجاهلها):
+    تعليمات إلزامية بخصوص اللغة والتشكيل (لا تتجاهلها):
+    - اكتب narration_script وhook_text وtitle وcaption بالعربية الفصحى السليمة
+      حصراً، بلا أي كلمة أو تركيب عامي (مصري أو غيره)، حتى تُقرأ الجملة بشكل
+      منضبط وواضح بصوت التعليق ويفهمها كل الجمهور العربي على اختلاف لهجاته.
     - استخدم تشكيلاً جزئياً وخفيفاً (Selective/Light Tashkeel) فقط في المواضع التي قد يلتبس نطقها أو معناها بدون تشكيل (كلمات متشابهة رسماً ومختلفة نطقاً، أفعال قد تُقرأ بأكثر من صيغة، كلمات نادرة، إلخ).
     - لا تضع تشكيلاً على كل حرف في كل كلمة — هذا غير مطلوب، ويجعل الترجمة النصية الظاهرة على الشاشة مزدحمة بصرياً دون داعٍ.
     - اترك الكلمات الواضحة النطق بدون أي تشكيل، وتجنّب تشكيل أواخر الكلمات إعرابياً إلا إذا كان ضرورياً فعلاً لتفادي التباس حقيقي في المعنى أو النطق.
@@ -570,9 +582,10 @@ def generate_topic() -> Topic:
                 word_count,
             )
 
-        # Always close every video with the fixed subscribe/like/comment/bell
-        # outro (see CTA_OUTRO_VARIANTS) — not only when the script came up
-        # short, so this reliably shows up on every published video.
+        # Always close every video with exactly one of the fixed
+        # subscribe/like/comment/bell outros (see CTA_OUTRO_VARIANTS) — not
+        # only when the script came up short, so this reliably shows up on
+        # every published video, and never with two outros stacked together.
         topic.narration_script = _append_engagement_outro(topic.narration_script, MIN_SCRIPT_WORDS)
         word_count = len(topic.narration_script.split())
         if word_count < MIN_SCRIPT_WORDS:
