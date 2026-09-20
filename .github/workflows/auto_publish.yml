@@ -33,18 +33,12 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Cache Whisper model
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/huggingface
-          key: whisper-model-base
-
       - name: Install dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg
           python -m pip install --upgrade pip
-          pip install requests edge-tts faster-whisper
+          pip install requests edge-tts
 
       - name: Generate and publish
         env:
@@ -62,7 +56,6 @@ jobs:
           MAX_SCRIPT_WORDS: '165'
           MIN_SCENE_CLIPS: '4'
           TOPIC_HISTORY_FILE: 'topic_history.json'
-          WHISPER_MODEL: 'base'
         run: |
           echo "Python files in repository:"
           find . -maxdepth 2 -type f -name '*.py' -print
