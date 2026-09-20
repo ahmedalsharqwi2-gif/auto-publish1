@@ -13,10 +13,7 @@ from pathlib import Path
 # =============================================================================
 
 # Option 1: Set directly here (NOT recommended for production)
-# BUFFER_ACCESS_TOKEN = "your_buffer_token_here"
-
-# Option 2: Use environment variable (RECOMMENDED)
-BUFFER_ACCESS_TOKEN = os.getenv("BUFFER_ACCESS_TOKEN", "")
+BUFFER_ACCESS_TOKEN = "xbyy--jPWrdUesBHdqDUJsDSPJoFjVkW8ha7s7xA1ui"
 
 # Optional: Specify which Buffer profiles to post to
 # Leave empty to use default profile
