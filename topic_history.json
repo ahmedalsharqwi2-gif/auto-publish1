@@ -1,122 +1,125 @@
-[
-  {
-    "title": "الضوء الأخضر الغامض فوق مدننا",
-    "hook_text": "هل تعلم لماذا يظهر ضوء أخضر غامض في سماء بعض المدن ليلاً؟",
-    "search_keywords_en": "green aurora, mid-latitude aurora, solar wind, atmospheric phenomenon",
-    "created_at": "2026-09-15T09:35:58Z"
-  },
-  {
-    "title": "سر نوم الفلامنغو على ساق واحدة",
-    "hook_text": "هل تعلم لماذا ينام طائر الفلامنغو على ساقٍ واحدة فقط؟",
-    "search_keywords_en": "flamingo sleeping leg",
-    "created_at": "2026-09-15T12:08:04Z"
-  },
-  {
-    "title": "سر ألوان السلاحف البحرية الغامضة",
-    "hook_text": "لماذا تُظهر بعض السلاحف البحرية ألوانًا زاهية عند اقترابها من الشاطئ؟",
-    "search_keywords_en": "sea turtle coloration, marine camouflage",
-    "created_at": "2026-09-15T16:17:08Z"
-  },
-  {
-    "title": "نحل الصحراء وشمس الظلام",
-    "hook_text": "هل تعلم لماذا يهاجر نحل العسل آلاف الكيلومترات إلى شمسٍ لا تُشرق؟",
-    "search_keywords_en": "desert honeybee migration",
-    "created_at": "2026-09-16T05:01:16Z"
-  },
-  {
-    "title": "صوت الطقطقة الغامض تحت البحر",
-    "hook_text": "ما السر الغامض وراء صوت طقطقةٍ يُسمع في أعماق البحر عند غروب الشمس؟",
-    "search_keywords_en": "underwater mystery, historic shipwreck, ocean sounds",
-    "created_at": "2026-09-16T12:08:41Z"
-  },
-  {
-    "title": "دوامات الفراشة الرملية في الربع الخالي",
-    "hook_text": "ما السبب الغامض وراء ظهور دوامات رملية تشبه الفراشات في صحراء الربع الخالي؟",
-    "search_keywords_en": "sand vortex butterfly",
-    "created_at": "2026-09-16T16:17:46Z"
-  },
-  {
-    "title": "مدن تحت الأرض: أسرار الهندسة القديمة",
-    "hook_text": "لماذا تُدفن بعض المدن تحت الأرض وتظل سرية لقرون؟",
-    "search_keywords_en": "underground cities, ancient engineering, Derinkuyu, hidden settlements",
-    "created_at": "2026-09-17T05:01:54Z"
-  },
-  {
-    "title": "أضواء زرقاء غامضة في جبال الألب",
-    "hook_text": "ما السر الغامض وراء ظهور أضواء زرقاء في سماء جبال الألب ليلاً؟",
-    "search_keywords_en": "blue lights Alps mystery",
-    "created_at": "2026-09-17T12:08:06Z"
-  },
-  {
-    "title": "سر أضواء الشفق الأخضر في القطب الشمالي",
-    "hook_text": "لماذا تظهر أضواء خضراء غامضة في سماء القطب الشمالي دون أي عواصف؟",
-    "search_keywords_en": "aurora borealis, green lights, polar phenomenon",
-    "created_at": "2026-09-17T16:18:32Z"
-  },
-  {
-    "title": "سر توجيه الحمام الزاجل عبر الصحراء",
-    "hook_text": "ما السبب الغريب وراء قدرة بعض الطيور على إيجاد مسارها عبر الصحراء دون أي خريطة؟",
-    "search_keywords_en": "pigeon navigation, magnetic field, desert birds",
-    "created_at": "2026-09-18T05:01:32Z"
-  },
-  {
-    "title": "قروش تعيش دون ماء لأسابيع؟",
-    "hook_text": "ما السبب الحقيقي وراء قدرة بعض القروش على العيش دون ماء لعدة أسابيع؟",
-    "search_keywords_en": "shark survival without water",
-    "created_at": "2026-09-18T12:07:22Z"
-  },
-  {
-    "title": "سر تغير لون الأخطبوط في الظلام",
-    "hook_text": "ما السبب الحقيقي وراء قدرة الأخطبوط على تغيير لونه في الظلام؟",
-    "search_keywords_en": "cuttlefish color change, cephalopod camouflage, marine biology",
-    "created_at": "2026-09-18T16:16:17Z"
-  },
-  {
-    "title": "إنشاد الضفادع المتزامن في الأمازون",
-    "hook_text": "لماذا تُغنِّي الضفادع في الأمازون كأنها فرقة موسيقية؟",
-    "search_keywords_en": "synchronized frog chorusing",
-    "created_at": "2026-09-19T05:01:16Z"
-  },
-  {
-    "title": "الثلج الأصفر في القطب: سر غير متوقع",
-    "hook_text": "لماذا يظل الثلج أصفرًا في بعض القطبين رغم أنه أبيض؟",
-    "search_keywords_en": "yellow snow polar mystery",
-    "category": "حقائق علمية صادمة",
-    "created_at": "2026-09-19T06:00:49Z"
-  },
-  {
-    "title": "هل يمكن النوم يومين متتاليين؟",
-    "hook_text": "هل يستطيع الإنسان النوم 48 ساعة متواصلة دون أي أثر؟",
-    "search_keywords_en": "human sleep, prolonged sleep, hypersomnia",
-    "category": "غرائب جسم الإنسان والطب",
-    "created_at": "2026-09-19T06:20:12Z"
-  },
-  {
-    "title": "نسر الصحراء: لماذا ينام 20 ساعة؟",
-    "hook_text": "لماذا ينام النسر القطبي 20 ساعة يوميًا رغم حرارة الصحراء؟",
-    "search_keywords_en": "desert eagle",
-    "category": "عجائب عالم الحيوان",
-    "created_at": "2026-09-19T06:24:42Z"
-  },
-  {
-    "title": "وميض أزرق غامض على سطح الزهرة",
-    "hook_text": "كيف يمكن لكوكب الزهرة أن يشتعل بوميض أزرق لا يراه البشر؟",
-    "search_keywords_en": "venus glow",
-    "category": "أسرار الفضاء والمحيطات",
-    "created_at": "2026-09-19T13:48:12Z"
-  },
-  {
-    "title": "قبر فرعون داخل صخرة لا تُكسر",
-    "hook_text": "أي فرعون أمر بحفر قبر داخل صخرة لا يمكن كسرها؟",
-    "search_keywords_en": "ancient egypt tomb",
-    "category": "حضارات وعادات وثقافات غير مألوفة",
-    "created_at": "2026-09-19T16:15:51Z"
-  },
-  {
-    "title": "ضباب أحمر فوق نهر أسترالي: سر اللون الغامض",
-    "hook_text": "لماذا يتشكل ضبابٌ أحمرٌ فوق وادي نهرٍ في أستراليا؟",
-    "search_keywords_en": "red fog",
-    "category": "ظواهر طبيعية نادرة",
-    "created_at": "2026-09-20T05:01:38Z"
-  }
-]
+{
+  "posted_topics": [],
+  "pending_topics": [
+    {
+      "title": "الضوء الأخضر الغامض فوق مدننا",
+      "hook_text": "هل تعلم لماذا يظهر ضوء أخضر غامض في سماء بعض المدن ليلاً؟",
+      "search_keywords_en": "green aurora, mid-latitude aurora, solar wind, atmospheric phenomenon",
+      "created_at": "2026-09-15T09:35:58Z"
+    },
+    {
+      "title": "سر نوم الفلامنغو على ساق واحدة",
+      "hook_text": "هل تعلم لماذا ينام طائر الفلامنغو على ساقٍ واحدة فقط؟",
+      "search_keywords_en": "flamingo sleeping leg",
+      "created_at": "2026-09-15T12:08:04Z"
+    },
+    {
+      "title": "سر ألوان السلاحف البحرية الغامضة",
+      "hook_text": "لماذا تُظهر بعض السلاحف البحرية ألوانًا زاهية عند اقترابها من الشاطئ؟",
+      "search_keywords_en": "sea turtle coloration, marine camouflage",
+      "created_at": "2026-09-15T16:17:08Z"
+    },
+    {
+      "title": "نحل الصحراء وشمس الظلام",
+      "hook_text": "هل تعلم لماذا يهاجر نحل العسل آلاف الكيلومترات إلى شمسٍ لا تُشرق؟",
+      "search_keywords_en": "desert honeybee migration",
+      "created_at": "2026-09-16T05:01:16Z"
+    },
+    {
+      "title": "صوت الطقطقة الغامض تحت البحر",
+      "hook_text": "ما السر الغامض وراء صوت طقطقةٍ يُسمع في أعماق البحر عند غروب الشمس؟",
+      "search_keywords_en": "underwater mystery, historic shipwreck, ocean sounds",
+      "created_at": "2026-09-16T12:08:41Z"
+    },
+    {
+      "title": "دوامات الفراشة الرملية في الربع الخالي",
+      "hook_text": "ما السبب الغامض وراء ظهور دوامات رملية تشبه الفراشات في صحراء الربع الخالي؟",
+      "search_keywords_en": "sand vortex butterfly",
+      "created_at": "2026-09-16T16:17:46Z"
+    },
+    {
+      "title": "مدن تحت الأرض: أسرار الهندسة القديمة",
+      "hook_text": "لماذا تُدفن بعض المدن تحت الأرض وتظل سرية لقرون؟",
+      "search_keywords_en": "underground cities, ancient engineering, Derinkuyu, hidden settlements",
+      "created_at": "2026-09-17T05:01:54Z"
+    },
+    {
+      "title": "أضواء زرقاء غامضة في جبال الألب",
+      "hook_text": "ما السر الغامض وراء ظهور أضواء زرقاء في سماء جبال الألب ليلاً؟",
+      "search_keywords_en": "blue lights Alps mystery",
+      "created_at": "2026-09-17T12:08:06Z"
+    },
+    {
+      "title": "سر أضواء الشفق الأخضر في القطب الشمالي",
+      "hook_text": "لماذا تظهر أضواء خضراء غامضة في سماء القطب الشمالي دون أي عواصف؟",
+      "search_keywords_en": "aurora borealis, green lights, polar phenomenon",
+      "created_at": "2026-09-17T16:18:32Z"
+    },
+    {
+      "title": "سر توجيه الحمام الزاجل عبر الصحراء",
+      "hook_text": "ما السبب الغريب وراء قدرة بعض الطيور على إيجاد مسارها عبر الصحراء دون أي خريطة؟",
+      "search_keywords_en": "pigeon navigation, magnetic field, desert birds",
+      "created_at": "2026-09-18T05:01:32Z"
+    },
+    {
+      "title": "قروش تعيش دون ماء لأسابيع؟",
+      "hook_text": "ما السبب الحقيقي وراء قدرة بعض القروش على العيش دون ماء لعدة أسابيع؟",
+      "search_keywords_en": "shark survival without water",
+      "created_at": "2026-09-18T12:07:22Z"
+    },
+    {
+      "title": "سر تغير لون الأخطبوط في الظلام",
+      "hook_text": "ما السبب الحقيقي وراء قدرة الأخطبوط على تغيير لونه في الظلام؟",
+      "search_keywords_en": "cuttlefish color change, cephalopod camouflage, marine biology",
+      "created_at": "2026-09-18T16:16:17Z"
+    },
+    {
+      "title": "إنشاد الضفادع المتزامن في الأمازون",
+      "hook_text": "لماذا تُغنِّي الضفادع في الأمازون كأنها فرقة موسيقية؟",
+      "search_keywords_en": "synchronized frog chorusing",
+      "created_at": "2026-09-19T05:01:16Z"
+    },
+    {
+      "title": "الثلج الأصفر في القطب: سر غير متوقع",
+      "hook_text": "لماذا يظل الثلج أصفرًا في بعض القطبين رغم أنه أبيض؟",
+      "search_keywords_en": "yellow snow polar mystery",
+      "category": "حقائق علمية صادمة",
+      "created_at": "2026-09-19T06:00:49Z"
+    },
+    {
+      "title": "هل يمكن النوم يومين متتاليين؟",
+      "hook_text": "هل يستطيع الإنسان النوم 48 ساعة متواصلة دون أي أثر؟",
+      "search_keywords_en": "human sleep, prolonged sleep, hypersomnia",
+      "category": "غرائب جسم الإنسان والطب",
+      "created_at": "2026-09-19T06:20:12Z"
+    },
+    {
+      "title": "نسر الصحراء: لماذا ينام 20 ساعة؟",
+      "hook_text": "لماذا ينام النسر القطبي 20 ساعة يوميًا رغم حرارة الصحراء؟",
+      "search_keywords_en": "desert eagle",
+      "category": "عجائب عالم الحيوان",
+      "created_at": "2026-09-19T06:24:42Z"
+    },
+    {
+      "title": "وميض أزرق غامض على سطح الزهرة",
+      "hook_text": "كيف يمكن لكوكب الزهرة أن يشتعل بوميض أزرق لا يراه البشر؟",
+      "search_keywords_en": "venus glow",
+      "category": "أسرار الفضاء والمحيطات",
+      "created_at": "2026-09-19T13:48:12Z"
+    },
+    {
+      "title": "قبر فرعون داخل صخرة لا تُكسر",
+      "hook_text": "أي فرعون أمر بحفر قبر داخل صخرة لا يمكن كسرها؟",
+      "search_keywords_en": "ancient egypt tomb",
+      "category": "حضارات وعادات وثقافات غير مألوفة",
+      "created_at": "2026-09-19T16:15:51Z"
+    },
+    {
+      "title": "ضباب أحمر فوق نهر أسترالي: سر اللون الغامض",
+      "hook_text": "لماذا يتشكل ضبابٌ أحمرٌ فوق وادي نهرٍ في أستراليا؟",
+      "search_keywords_en": "red fog",
+      "category": "ظواهر طبيعية نادرة",
+      "created_at": "2026-09-20T05:01:38Z"
+    }
+  ]
+}
