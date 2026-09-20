@@ -76,7 +76,6 @@ def load_topics():
         
         # Backward compatibility: handle both old (list) and new (dict) formats
         if isinstance(data, list):
-            # Old format: just a list of topics
             logger.info(f"Detected old list format with {len(data)} topics")
             pending = data
             data = {
@@ -84,7 +83,6 @@ def load_topics():
                 "pending_topics": data
             }
         elif isinstance(data, dict):
-            # New format: dict with posted_topics and pending_topics
             pending = data.get('pending_topics', [])
             logger.info(f"Detected new dict format with {len(pending)} pending topics")
         else:
@@ -110,6 +108,20 @@ def save_topics(data):
     except Exception as e:
         logger.error(f"Failed to save topics: {e}")
         raise
+
+def get_topic_text(topic):
+    """Extract text from topic (handles both string and dict formats)."""
+    if isinstance(topic, str):
+        return topic
+    elif isinstance(topic, dict):
+        # Try common keys
+        for key in ['text', 'topic', 'content', 'message']:
+            if key in topic:
+                return topic[key]
+        # Fallback: convert dict to string
+        return str(topic)
+    else:
+        return str(topic)
 
 def post_to_buffer(text, profiles=None):
     """Post text to Buffer API with retry logic."""
@@ -193,13 +205,14 @@ def main():
     failed_count = 0
     
     for i, topic in enumerate(topics_to_post, 1):
-        logger.info(f"Processing topic {i}/{len(topics_to_post)}: {topic[:50]}...")
+        topic_text = get_topic_text(topic)
+        logger.info(f"Processing topic {i}/{len(topics_to_post)}: {topic_text[:50]}...")
         
         try:
-            result = post_to_buffer(topic)
+            result = post_to_buffer(topic_text)
             
             posted_topic = {
-                "topic": topic,
+                "topic": topic_text,
                 "posted_at": datetime.now().isoformat(),
                 "buffer_id": result.get('id'),
                 "platforms": result.get('profile_ids', [])
