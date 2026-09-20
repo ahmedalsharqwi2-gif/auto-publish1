@@ -13,7 +13,7 @@ from pathlib import Path
 # =============================================================================
 
 # Option 1: Set directly here (NOT recommended for production)
-BUFFER_ACCESS_TOKEN = "xbyy--jPWrdUesBHdqDUJsDSPJoFjVkW8ha7s7xA1ui"
+BUFFER_ACCESS_TOKEN = "4yVAutD2Nc74DJEorDxozfXxcZLtscZKBbhPRy98NWi"
 
 # Optional: Specify which Buffer profiles to post to
 # Leave empty to use default profile
