@@ -4,8 +4,15 @@ Auto Publish Pipeline - Main Script
 This script reads topics from topic_history.json and publishes them to Buffer
 using Buffer's GraphQL Public API.
 
-Mutation shape verified against official docs:
-https://developers.buffer.com/guides/your-first-post.html
+IMPORTANT: Buffer validates posts per-channel-type:
+- Facebook: requires input.facebook.type = 'post' | 'story' | 'reel'
+- TikTok: requires at least one image/video attached
+- YouTube: requires a video, title, and category
+
+This script currently only has text topics (no rendered video yet), so it:
+- Posts text-only content to Facebook channels (type='post')
+- Skips TikTok/YouTube channels with a clear log message until a video
+  pipeline (like the one in horror_content) produces real media files.
 
 Features:
 - Logging to file and console
@@ -68,6 +75,18 @@ def setup_logging():
 logger = setup_logging()
 
 # =============================================================================
+# CHANNEL TYPE DETECTION
+# =============================================================================
+
+# Channels that require video/image media we do not produce yet.
+# We detect this dynamically from Buffer's error message instead of
+# hardcoding channel IDs, so this keeps working if channels are added/removed.
+VIDEO_REQUIRED_MARKERS = [
+    "require a video",
+    "require at least one image or video",
+]
+
+# =============================================================================
 # HELPER FUNCTIONS
 # =============================================================================
 
@@ -126,17 +145,20 @@ def post_to_buffer(text, channel_id):
     """
     Create a post on Buffer using the GraphQL createPost mutation.
 
-    Matches the official Buffer API schema:
-    - input.text (not input.content.text)
-    - input.schedulingType and input.mode are required
-    - response uses inline fragments: PostActionSuccess | MutationError
+    Includes facebook.type='post' so Facebook channels accept a text-only post.
+    TikTok/YouTube channels will still be rejected by Buffer (they require
+    media) - this is expected until a video pipeline provides real assets.
 
     Args:
         text: The post text/caption
         channel_id: The Buffer channel ID to post to
 
     Returns:
-        dict: either {"post": {...}} on success, or raises on error
+        dict: {"post": {...}} on success
+
+    Raises:
+        SkipChannelError: if this channel type requires media we don't have
+        RuntimeError: for any other failure
     """
     mutation = """
     mutation CreatePost($input: CreatePostInput!) {
@@ -161,6 +183,9 @@ def post_to_buffer(text, channel_id):
             "channelId": channel_id,
             "schedulingType": "automatic",
             "mode": "addToQueue",
+            "facebook": {
+                "type": "post"
+            }
         }
     }
 
@@ -180,15 +205,16 @@ def post_to_buffer(text, channel_id):
             response.raise_for_status()
             result = response.json()
 
-            # Non-recoverable errors (auth, server, validation)
             if "errors" in result and result["errors"]:
                 raise RuntimeError(f"GraphQL errors: {result['errors']}")
 
             payload = result.get("data", {}).get("createPost", {})
 
-            # Recoverable/typed error (MutationError branch)
             if "message" in payload and "post" not in payload:
-                raise RuntimeError(f"Buffer MutationError: {payload['message']}")
+                error_message = payload["message"]
+                if any(marker in error_message for marker in VIDEO_REQUIRED_MARKERS):
+                    raise SkipChannelError(error_message)
+                raise RuntimeError(f"Buffer MutationError: {error_message}")
 
             post = payload.get("post")
             if not post:
@@ -196,6 +222,9 @@ def post_to_buffer(text, channel_id):
 
             logger.info(f"Successfully posted to Buffer: {post.get('id', 'unknown')}")
             return payload
+
+        except SkipChannelError:
+            raise
 
         except requests.exceptions.HTTPError as e:
             body = e.response.text if e.response is not None else str(e)
@@ -215,6 +244,10 @@ def post_to_buffer(text, channel_id):
                 raise
 
     raise RuntimeError("Max retries exceeded")
+
+class SkipChannelError(Exception):
+    """Raised when a channel requires media (video/image) we don't have yet."""
+    pass
 
 # =============================================================================
 # MAIN FUNCTION
@@ -249,6 +282,7 @@ def main():
 
     posted_count = 0
     failed_count = 0
+    skipped_channels = set()
 
     for i, topic in enumerate(topics_to_post, 1):
         topic_text = get_topic_text(topic)
@@ -270,6 +304,14 @@ def main():
                 data['posted_topics'].append(posted_topic)
                 topic_posted = True
 
+            except SkipChannelError as e:
+                if channel_id not in skipped_channels:
+                    logger.warning(
+                        f"Skipping channel {channel_id} (requires video/image, "
+                        f"not available yet): {e}"
+                    )
+                    skipped_channels.add(channel_id)
+
             except Exception as e:
                 logger.error(f"Failed to post topic to channel {channel_id}: {e}")
                 last_error = e
@@ -280,7 +322,10 @@ def main():
             logger.info(f"✓ Posted successfully ({posted_count}/{len(topics_to_post)})")
         else:
             failed_count += 1
-            logger.error(f"Failed to post topic to any channel: {last_error}")
+            if last_error:
+                logger.error(f"Failed to post topic to any channel: {last_error}")
+            else:
+                logger.warning("Topic not posted: all channels require media not yet available")
 
         if i < len(topics_to_post):
             logger.debug(f"Waiting {POST_DELAY_SECONDS}s before next post...")
@@ -294,11 +339,13 @@ def main():
     logger.info("=" * 60)
     logger.info("Pipeline Completed")
     logger.info(f"Posted: {posted_count}")
-    logger.info(f"Failed: {failed_count}")
+    logger.info(f"Failed/Skipped: {failed_count}")
+    if skipped_channels:
+        logger.info(f"Channels needing media pipeline: {', '.join(skipped_channels)}")
     logger.info(f"Remaining pending: {len(data['pending_topics'])}")
     logger.info("=" * 60)
 
-    if failed_count > 0:
+    if posted_count == 0 and failed_count > 0:
         sys.exit(1)
 
 if __name__ == "__main__":
