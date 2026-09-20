@@ -2,8 +2,10 @@
 Auto Publish Pipeline - Main Script
 
 This script reads topics from topic_history.json and publishes them to Buffer
-using Buffer's GraphQL Public API (the legacy REST API no longer accepts
-new Public API keys as of 2026 - see https://developers.buffer.com/guides/rest-migration.html).
+using Buffer's GraphQL Public API.
+
+Mutation shape verified against official docs:
+https://developers.buffer.com/guides/your-first-post.html
 
 Features:
 - Logging to file and console
@@ -124,23 +126,30 @@ def post_to_buffer(text, channel_id):
     """
     Create a post on Buffer using the GraphQL createPost mutation.
 
+    Matches the official Buffer API schema:
+    - input.text (not input.content.text)
+    - input.schedulingType and input.mode are required
+    - response uses inline fragments: PostActionSuccess | MutationError
+
     Args:
         text: The post text/caption
         channel_id: The Buffer channel ID to post to
 
     Returns:
-        dict: The createPost payload from Buffer's GraphQL response
+        dict: either {"post": {...}} on success, or raises on error
     """
     mutation = """
     mutation CreatePost($input: CreatePostInput!) {
       createPost(input: $input) {
-        post {
-          id
-          status
+        ... on PostActionSuccess {
+          post {
+            id
+            text
+            dueAt
+          }
         }
-        userErrors {
+        ... on MutationError {
           message
-          path
         }
       }
     }
@@ -148,11 +157,10 @@ def post_to_buffer(text, channel_id):
 
     variables = {
         "input": {
+            "text": text,
             "channelId": channel_id,
-            "status": "pending",
-            "content": {
-                "text": text
-            }
+            "schedulingType": "automatic",
+            "mode": "addToQueue",
         }
     }
 
@@ -172,15 +180,20 @@ def post_to_buffer(text, channel_id):
             response.raise_for_status()
             result = response.json()
 
-            if "errors" in result:
+            # Non-recoverable errors (auth, server, validation)
+            if "errors" in result and result["errors"]:
                 raise RuntimeError(f"GraphQL errors: {result['errors']}")
 
             payload = result.get("data", {}).get("createPost", {})
-            user_errors = payload.get("userErrors") or []
-            if user_errors:
-                raise RuntimeError(f"Buffer userErrors: {user_errors}")
 
-            post = payload.get("post", {})
+            # Recoverable/typed error (MutationError branch)
+            if "message" in payload and "post" not in payload:
+                raise RuntimeError(f"Buffer MutationError: {payload['message']}")
+
+            post = payload.get("post")
+            if not post:
+                raise RuntimeError(f"Unexpected Buffer response: {payload}")
+
             logger.info(f"Successfully posted to Buffer: {post.get('id', 'unknown')}")
             return payload
 
