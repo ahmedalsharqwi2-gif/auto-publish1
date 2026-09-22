@@ -1138,6 +1138,26 @@ def _ass_escape(text: str) -> str:
     return text.replace("{", "").replace("}", "").replace("\n", " ").replace("\r", " ")
 
 
+# علامات تُحذف من الترجمة المعروضة على الشاشة فقط، وليس من النص المنطوق —
+# النقطة والفاصلة وعلامات الاقتباس وما شابهها تبدو كإشارة واضحة لمحتوى
+# مولَّد بالذكاء الاصطناعي عند ظهورها حرفيًا في ترجمة فيديو قصير. النص
+# المُمرَّر لـ generate_tts (topic.narration_script) يبقى بعلاماته كاملة
+# دون أي تغيير، لأن edge-tts يستخدمها لصناعة السكتات الصحيحة بين الجمل؛
+# هذا التنظيف يُطبَّق فقط على نسخة الكلمات المعروضة في ملف الـ .ass.
+DISPLAY_PUNCTUATION = str.maketrans(
+    "".join([
+        ".", ",", "،", "؛", ":", "!", "?", "؟", "…", "-", "—", "_",
+        "(", ")", "[", "]", "{", "}", '"', "«", "»", "/", "\\",
+    ]),
+    " " * 23,
+)
+
+
+def _clean_display_words(words: list[str]) -> list[str]:
+    cleaned = [w.translate(DISPLAY_PUNCTUATION).strip() for w in words]
+    return [w for w in cleaned if w]
+
+
 def build_subtitles(text: str, duration: float, out_path: Path, timings_path: Path | None = None) -> Path:
     """Build a two-line, RTL, word-timed .ass caption file synced to the
     edge-tts narration.
@@ -1223,11 +1243,16 @@ def build_subtitles(text: str, duration: float, out_path: Path, timings_path: Pa
     rtl = "\u200f"  # RIGHT-TO-LEFT MARK — forces each caption line to lay out RTL
     events = []
     for chunk_words, start, end in chunks:
-        split_at = max(1, (len(chunk_words) + 1) // 2)
-        line1 = rtl + _ass_escape(" ".join(chunk_words[:split_at]))
+        # Punctuation is stripped here (display only) — chunk_words itself,
+        # and the TTS input elsewhere, keep every mark unchanged.
+        display_words = _clean_display_words(chunk_words)
+        if not display_words:
+            continue
+        split_at = max(1, (len(display_words) + 1) // 2)
+        line1 = rtl + _ass_escape(" ".join(display_words[:split_at]))
         chunk_text = line1
-        if len(chunk_words) > 1:
-            line2 = rtl + _ass_escape(" ".join(chunk_words[split_at:]))
+        if len(display_words) > 1:
+            line2 = rtl + _ass_escape(" ".join(display_words[split_at:]))
             chunk_text += "\\N" + line2  # \N = forced ASS line break
         events.append(f"Dialogue: 0,{fmt(start)},{fmt(end)},Caption,,0,0,0,,{chunk_text}")
 
