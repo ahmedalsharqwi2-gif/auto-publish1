@@ -81,6 +81,25 @@ jobs:
           test -f main.py || { echo "ERROR: main.py is missing from the repository"; exit 1; }
           python main.py
 
+      - name: Upload pronunciation review report
+        # pronunciation_review.json lists any script word Whisper couldn't
+        # confidently match against the real rendered audio — the best
+        # automated signal for "this word may have been mispronounced" this
+        # pipeline can produce (see align_words_with_whisper in main.py).
+        # Uploaded even on a failed run (if: always()) so a run that failed
+        # partway still gives whatever it managed to check. Downloadable
+        # from this run's Actions summary page under "Artifacts".
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pronunciation-review-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            work/*/pronunciation_review.json
+            work/*/topic.json
+            work/*/whisper_alignment_status.json
+          if-no-files-found: ignore
+          retention-days: 14
+
       - name: Persist topic history
         # Persist even when footage/publishing fails: the generated topic has
         # already been used and must not be offered again on the next run.
