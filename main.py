@@ -492,8 +492,8 @@ SYSTEM_PROMPT = textwrap.dedent(
 
     {
       "category": "اختر فئة واحدة فقط بالضبط من هذه القائمة (انسخ النص كما هو): غرائب دينية موثقة / عجائب عالم الحيوان / غرائب جسم الإنسان والطب / حقائق علمية صادمة / أسرار الفضاء والمحيطات / ظواهر طبيعية نادرة / قصص تاريخية غريبة / حضارات وعادات وثقافات غير مألوفة / اختراعات وظواهر تقنية / أماكن غامضة / حقائق نفسية واجتماعية — بشرط ألا تكون من الفئات الممنوعة المذكورة في رسالة المستخدم",
-      "hook_text": "سؤال واحد فقط، غريب وغير متوقع ومثير للفضول، بالعربية الفصحى المبسطة، يُفتتح به الفيديو. يجب أن يُصاغ حرفياً كسؤال ينتهي بعلامة استفهام (؟)، ولا يكشف الإجابة إطلاقاً، ولا يتجاوز 12 كلمة. الهدف الوحيد منه أن يجعل المشاهد غير قادر على تجاوز الفيديو قبل معرفة الإجابة. استخدم تشكيلاً جزئياً وخفيفاً فقط (وليس تشكيلاً كاملاً) في المواضع التي قد يلتبس نطقها بدونه",
-      "narration_script": "السكريبت الكامل الذي سيُروى بصوت التعليق ويظهر كترجمة على الفيديو. يبدأ بـ hook_text حرفياً ثم يجيب عنه بتفاصيل موثوقة ومثيرة في فقرات مترابطة، وينتهي بخاتمة قصيرة. هذا الحقل وحده (شاملاً hook_text) يجب ألا يقل مطلقاً عن 150 كلمة عربية ولا يتجاوز 165 كلمة، من أول استجابة بلا استثناء — نصوص أقصر من ذلك تُرفض تلقائياً في الإنتاج الفعلي وتُهدر طلب Groq بالكامل، فتأكد من هذا الحد قبل التسليم لا بعده. مقسم إلى جمل قصيرة واضحة.",
+      "hook_text": "سؤال واحد فقط، غريب وغير متوقع ومثير للفضول، بالعربية الفصحى المبسطة، يُفتتح به الفيديو. يجب أن يُصاغ حرفياً كسؤال ينتهي بعلامة استفهام (؟)، ولا يكشف الإجابة إطلاقاً، ولا يتجاوز 12 كلمة. الهدف الوحيد منه أن يجعل المشاهد غير قادر على تجاوز الفيديو قبل معرفة الإجابة. شكّله تشكيلاً كاملاً على كل حرف (لا تشكيلاً جزئياً) — التشكيل لن يظهر في الترجمة المعروضة على الشاشة، فقط يضبط نطق صوت التعليق",
+      "narration_script": "السكريبت الكامل الذي سيُروى بصوت التعليق ويظهر كترجمة على الفيديو (بعد حذف التشكيل من نسخة الترجمة فقط — انظر تعليمات التشكيل أدناه). يبدأ بـ hook_text حرفياً ثم يجيب عنه بتفاصيل موثوقة ومثيرة في فقرات مترابطة، وينتهي بخاتمة قصيرة. هذا الحقل وحده (شاملاً hook_text) يجب ألا يقل مطلقاً عن 150 كلمة عربية ولا يتجاوز 165 كلمة، من أول استجابة بلا استثناء — نصوص أقصر من ذلك تُرفض تلقائياً في الإنتاج الفعلي وتُهدر طلب Groq بالكامل، فتأكد من هذا الحد قبل التسليم لا بعده. مقسم إلى جمل قصيرة واضحة، ومشكَّل تشكيلاً كاملاً على كل حرف.",
       "title": "عنوان جذاب قصير بالعربية",
       "caption": "كابشن للمنشور بالعربية، 1-3 جمل",
       "hashtags": ["#وسم1", "#وسم2", "#وسم3", "#وسم4", "#وسم5"],
@@ -574,25 +574,32 @@ SYSTEM_PROMPT = textwrap.dedent(
     - اكتب narration_script وhook_text وtitle وcaption بالعربية الفصحى السليمة
       حصراً، بلا أي كلمة أو تركيب عامي (مصري أو غيره)، حتى تُقرأ الجملة بشكل
       منضبط وواضح بصوت التعليق ويفهمها كل الجمهور العربي على اختلاف لهجاته.
-    - استخدم تشكيلاً جزئياً وخفيفاً (Selective/Light Tashkeel) فقط في المواضع التي قد يلتبس نطقها أو معناها بدون تشكيل (كلمات متشابهة رسماً ومختلفة نطقاً، أفعال قد تُقرأ بأكثر من صيغة، كلمات نادرة، إلخ).
-    - لا تضع تشكيلاً على كل حرف في كل كلمة — هذا غير مطلوب، ويجعل الترجمة النصية الظاهرة على الشاشة مزدحمة بصرياً دون داعٍ.
-    - اترك الكلمات الواضحة النطق بدون أي تشكيل، وتجنّب تشكيل أواخر الكلمات إعرابياً إلا إذا كان ضرورياً فعلاً لتفادي التباس حقيقي في المعنى أو النطق.
-    - على الرغم من القاعدة العامة أعلاه، هذه المواضع بالتحديد يجب أن تُشكَّل دائماً
-      لأن نطقها الخاطئ بلا تشكيل أصبح ملحوظاً في الإنتاج الفعلي:
-        • الضمائر المتصلة بآخر الفعل أو الاسم (ـكَ، ـهُ، ـهَا، ـكُمْ...) — بدون
-          حركة على الضمير المتصل يخمّن محرك النطق حركة عشوائية فتُنطق الكلمة
-          بجنس أو حالة خاطئة.
+    - استخدم تشكيلاً كاملاً (Full Tashkeel) على كل حرف من حروف narration_script
+      وhook_text بلا استثناء — كل حركة (فتحة/ضمة/كسرة/سكون) وكل شدة، شاملاً
+      أواخر الكلمات إعرابياً، تماماً كما تُكتب النصوص المُشكَّلة بالكامل. هذا
+      تغيير عن أي تعليمات سابقة كانت تطلب تشكيلاً جزئياً فقط — التشكيل الجزئي
+      لم يعد مقبولاً، لأن الاعتماد على "الكلمات الواضحة" ترك كلمات كثيرة
+      تُنطق غلطاً فعلياً في الإنتاج. لا داعي للقلق من ازدحام الترجمة الظاهرة
+      على الشاشة بصرياً بسبب هذا التشكيل — التشكيل يُحذف تلقائياً من الترجمة
+      المعروضة في مرحلة لاحقة من خط الإنتاج ولا يظهر للمشاهد إطلاقاً، ويُستخدم
+      فقط لضبط نطق صوت التعليق.
+    - طبّق قواعد الإعراب والصرف الفصيحة الصحيحة بدقة عند وضع كل حركة (حالة
+      الفعل: مرفوع/منصوب/مجزوم، وحالة الاسم: مرفوع/منصوب/مجروم، وصيغة الأمر
+      والمضارع، وتوافق الضمائر). التشكيل الخاطئ نحوياً أسوأ من عدم وجود تشكيل
+      إطلاقاً لأنه يفرض نطقاً غلطاً محدداً بدل ترك محرك النطق يخمّن.
+    - انتبه بشكل خاص لهذه المواضع اللي أثبتت التجربة الفعلية أنها الأكثر عرضة
+      للنطق الخاطئ:
+        • الضمائر المتصلة بآخر الفعل أو الاسم (ـكَ، ـهُ، ـهَا، ـكُمْ...) —
+          الضمير نفسه يجب أن يحمل حركته الخاصة دائماً، منفصلة عن حركة الحرف
+          الذي قبله؛ اكتب الحركتين كلتيهما ولا تكتفِ بحركة واحدة على الفعل
+          وتترك الضمير عارياً (هذا أخطر غلط تكرر فعلياً في الإنتاج).
         • أي كلمة تتشابه رسماً مع كلمة أخرى مختلفة تماماً في المعنى والنطق
           (مثال: "زر" بمعنى الزرّ/الضغطة، والتي قد تُقرأ خطأً كفعل أمر من
-          "زار" بدون تشكيل) — شكّلها دائماً بالكامل بحركاتها الصحيحة.
+          "زار" بدون تشكيل).
         • صيغة الأمر والمضارع المجزوم للأفعال التي قد تُقرأ بأكثر من صيغة
-          (مثل "اشترك" في الأمر، أو "لا تَنْسَ" في النهي) — ضع الحركات
-          القصيرة على أحرفها لضمان النطق الصحيح لصيغة الأمر/النهي تحديداً لا
-          صيغة أخرى.
+          (مثل "اشترك" في الأمر، أو "لا تَنْسَ" في النهي).
         • أي كلمة قصيرة شائعة ليس لها نطق افتراضي واضح بلا تشكيل (مثل "جرس"
-          التي تُقرأ خطأً في الإنتاج الفعلي بدون تشكيل) — شكّل حركاتها
-          الجذرية فقط (مثال: "جَرَس") دون تشكيل حرف النهاية ما لم يكن
-          ضرورياً.
+          التي تُقرأ خطأً في الإنتاج الفعلي بدون تشكيل — والصواب "جَرَس").
     """
 ).strip()
 
@@ -1125,10 +1132,34 @@ def normalize_narration_duration(audio_path: Path, target_seconds: float) -> flo
 # insensitive) against our own known script word-by-word; any script word
 # that doesn't confidently match gets an interpolated timestamp from its
 # nearest matched neighbours, so every word still ends up with a timing.
+#
+# Pronunciation QA (see below) is built on top of this same alignment, and
+# it's worth being honest about what it can and can't catch. Comparing
+# TEXT after stripping diacritics from both sides can only notice a
+# completely different word being recognized (a dropped/extra/wrong word,
+# or silence) — it is structurally blind to a word whose CONSONANTS were
+# recognized correctly but whose SHORT VOWELS were off, because the
+# diacritic-stripped spelling is identical either way. That vowel-only
+# case is exactly the bug class already found by ear (جرس/جَرَس،
+# ليصلَك/ليصلَكَ) — a pure text-match check would not have caught either
+# one. faster-whisper's per-word `probability` (an acoustic confidence
+# score, not a text-match score) is used as a second, complementary
+# signal for exactly this blind spot: a word whose actual vowels sounded
+# unusual tends to score lower confidence even when the recognized text
+# still happens to match, since the score reflects what was actually
+# heard, not just which letters got written down.
 WHISPER_MODEL_SIZE = os.getenv("WHISPER_MODEL", "base")
+# Below this acoustic confidence, a MATCHED word is still flagged for
+# pronunciation review (see PRONUNCIATION_CONFIDENCE_THRESHOLD note above).
+# Chosen conservatively low so normal ASR uncertainty (accents, minor
+# audio artifacts) doesn't flood the report with false alarms — only
+# words Whisper was genuinely unsure about get flagged.
+LOW_CONFIDENCE_THRESHOLD = float(os.getenv("PRONUNCIATION_CONFIDENCE_THRESHOLD", "0.4"))
 
 
-def align_words_with_whisper(audio_path: Path, script_words: list[str]) -> list[dict[str, Any]]:
+def align_words_with_whisper(
+    audio_path: Path, script_words: list[str]
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     from faster_whisper import WhisperModel  # imported lazily; heavy optional dependency
 
     log.info("Force-aligning subtitles to the rendered audio with Whisper (%s)...", WHISPER_MODEL_SIZE)
@@ -1137,12 +1168,12 @@ def align_words_with_whisper(audio_path: Path, script_words: list[str]) -> list[
         str(audio_path), language="ar", word_timestamps=True, vad_filter=False,
     )
 
-    whisper_words: list[tuple[str, float, float]] = []
+    whisper_words: list[tuple[str, float, float, float]] = []
     for segment in segments:
         for w in (segment.words or []):
             text = (w.word or "").strip()
             if text:
-                whisper_words.append((text, float(w.start), float(w.end)))
+                whisper_words.append((text, float(w.start), float(w.end), float(getattr(w, "probability", 1.0))))
     if not whisper_words:
         raise PipelineError("Whisper produced no word-level timestamps")
 
@@ -1150,7 +1181,7 @@ def align_words_with_whisper(audio_path: Path, script_words: list[str]) -> list[
         return _normalize_for_compare(w).strip(" ،.!؟\u061F").lower()
 
     script_norm = [_norm(w) for w in script_words]
-    whisper_norm = [_norm(w) for w, _, _ in whisper_words]
+    whisper_norm = [_norm(w) for w, _, _, _ in whisper_words]
 
     matcher = difflib.SequenceMatcher(None, script_norm, whisper_norm, autojunk=False)
     timings: list[dict[str, Any] | None] = [None] * len(script_words)
@@ -1158,11 +1189,12 @@ def align_words_with_whisper(audio_path: Path, script_words: list[str]) -> list[
         for k in range(i2 - i1):
             if i1 + k >= len(script_words) or j1 + k >= len(whisper_words):
                 continue
-            _, start, end = whisper_words[j1 + k]
+            _, start, end, probability = whisper_words[j1 + k]
             timings[i1 + k] = {
                 "text": script_words[i1 + k],
                 "offset": start,
                 "duration": max(end - start, 0.05),
+                "probability": probability,
             }
 
     known_indices = [i for i, t in enumerate(timings) if t is not None]
@@ -1192,20 +1224,50 @@ def align_words_with_whisper(audio_path: Path, script_words: list[str]) -> list[
             next_start = timings[next_i]["offset"]
             span = max(next_start - prev_end, 0.05)
             offset = prev_end + span * (i - prev_i) / (next_i - prev_i)
-        timings[i] = {"text": script_words[i], "offset": offset, "duration": 0.3}
+        timings[i] = {"text": script_words[i], "offset": offset, "duration": 0.3, "probability": None}
 
     log.info(
         "Whisper alignment: %d/%d script words matched directly, %d interpolated",
         len(known_indices), len(script_words), len(script_words) - len(known_indices),
     )
-    return timings  # type: ignore[return-value]
+
+    # Pronunciation QA — two complementary signals, see the module comment
+    # above align_words_with_whisper for why both are needed:
+    #   "not_recognized" — Whisper's TEXT didn't match the script word at
+    #     all (a different/dropped/extra word, or silence). Catches gross
+    #     errors; blind to correct-consonants-wrong-vowel mistakes.
+    #   "low_confidence"  — the text matched, but Whisper's ACOUSTIC score
+    #     for that word was weak, which vowel-only mispronunciation can
+    #     still trigger even though the written result looks identical.
+    # This doesn't replace listening to the video, but it turns "many
+    # words are being mispronounced" from a vague, ear-only complaint into
+    # a concrete, per-run list of specific word indices to check first.
+    known_set = set(known_indices)
+    flagged_words: list[dict[str, Any]] = []
+    for i in range(len(script_words)):
+        if i not in known_set:
+            flagged_words.append({
+                "index": i, "text": script_words[i],
+                "approx_seconds": round(timings[i]["offset"], 2),
+                "reason": "not_recognized",
+            })
+            continue
+        prob = timings[i].get("probability")
+        if prob is not None and prob < LOW_CONFIDENCE_THRESHOLD:
+            flagged_words.append({
+                "index": i, "text": script_words[i],
+                "approx_seconds": round(timings[i]["offset"], 2),
+                "reason": "low_confidence", "confidence": round(prob, 2),
+            })
+    return timings, flagged_words  # type: ignore[return-value]
 
 
-def realign_subtitles_with_whisper(narration_path: Path, script_text: str) -> bool:
+def realign_subtitles_with_whisper(narration_path: Path, script_text: str) -> tuple[bool, list[dict[str, Any]]]:
     """Best-effort: overwrite narration_path's .timings.json with
-    Whisper-derived timings. Never raises — if Whisper isn't installed, the
-    model can't be fetched (e.g. no network), or alignment quality is too
-    low, the existing edge-tts timings are left in place and the pipeline
+    Whisper-derived timings, and return a pronunciation-QA list alongside
+    the success flag. Never raises — if Whisper isn't installed, the model
+    can't be fetched (e.g. no network), or alignment quality is too low,
+    the existing edge-tts timings are left in place and the pipeline
     continues rather than failing the whole run over a subtitle-quality
     enhancement.
 
@@ -1220,10 +1282,19 @@ def realign_subtitles_with_whisper(narration_path: Path, script_text: str) -> bo
     """
     timings_path = narration_path.with_suffix(".timings.json")
     try:
-        aligned = align_words_with_whisper(narration_path, script_text.split())
+        aligned, flagged_words = align_words_with_whisper(narration_path, script_text.split())
         timings_path.write_text(json.dumps(aligned, ensure_ascii=False), encoding="utf-8")
         log.info("Whisper-aligned timings written to %s", timings_path)
-        return True
+        if flagged_words:
+            log.warning(
+                "PRONUNCIATION REVIEW — %d word(s) flagged for review (possible mispronunciation, "
+                "worth listening to first): %s",
+                len(flagged_words),
+                ", ".join(
+                    f"{w['text']}@{w['approx_seconds']}s[{w['reason']}]" for w in flagged_words
+                ),
+            )
+        return True, flagged_words
     except Exception:  # noqa: BLE001
         log.error(
             "WHISPER ALIGNMENT FAILED — falling back to edge-tts's own word timings, which "
@@ -1231,7 +1302,7 @@ def realign_subtitles_with_whisper(narration_path: Path, script_text: str) -> bo
             "be out of sync. Full error below:",
             exc_info=True,
         )
-        return False
+        return False, []
 
 
 def _ass_escape(text: str) -> str:
@@ -1257,7 +1328,15 @@ DISPLAY_PUNCTUATION = str.maketrans(
 
 
 def _clean_display_words(words: list[str]) -> list[str]:
-    cleaned = [w.translate(DISPLAY_PUNCTUATION).strip() for w in words]
+    # التشكيل الكامل (انظر SYSTEM_PROMPT) ضروري لضبط نطق edge-tts، لكن عرضه
+    # حرفياً في الترجمة على الشاشة كان سيُظهر كل حركة/شدة فوق كل حرف تقريباً
+    # — غير مقروء بصرياً في فيديو قصير. _TASHKEEL_RE (مُعرَّف أعلى الملف)
+    # يُستخدم هنا لحذفه من نسخة العرض فقط؛ النص الأصلي الممرَّر لـ
+    # generate_tts يبقى بتشكيله الكامل دون أي تغيير.
+    cleaned = [
+        _TASHKEEL_RE.sub("", w.translate(DISPLAY_PUNCTUATION)).strip()
+        for w in words
+    ]
     return [w for w in cleaned if w]
 
 
@@ -1762,9 +1841,16 @@ def run_pipeline() -> None:
     # realign_subtitles_with_whisper's docstring for why. Must run after any
     # atempo speed correction above, so it aligns against the exact audio
     # that will be published.
-    whisper_aligned = realign_subtitles_with_whisper(narration_path, topic.narration_script)
+    whisper_aligned, pronunciation_flags = realign_subtitles_with_whisper(narration_path, topic.narration_script)
     (run_dir / "whisper_alignment_status.json").write_text(
         json.dumps({"whisper_aligned": whisper_aligned}, ensure_ascii=False), encoding="utf-8"
+    )
+    # Pronunciation QA report for this specific video — see
+    # align_words_with_whisper's docstring. Written even when the list is
+    # empty, so "no flags this run" is a visible, checkable fact rather
+    # than an absent file that looks the same as "never checked".
+    (run_dir / "pronunciation_review.json").write_text(
+        json.dumps(pronunciation_flags, ensure_ascii=False, indent=2), encoding="utf-8"
     )
 
     remember_topic(topic)
