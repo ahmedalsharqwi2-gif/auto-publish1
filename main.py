@@ -288,9 +288,12 @@ def _trim_script_to_word_limit(script: str, max_words: int) -> str:
 #     marked (اشْتَرِكْ) or it can be read as a different verb form
 #   - the jussive "لا تَنْسَ" needs its vowels marked so it isn't read as
 #     the indicative "لا تنسى"
+#   - "جرس" (bell) with no diacritics has no single obvious reading for a
+#     TTS engine guessing blind, and was confirmed mispronounced in
+#     production — its two root vowels are always marked (جَرَس) here
 CTA_OUTRO_VARIANTS = [
-    "إنْ أَعْجَبَكَ هذا الفيديو فلا تَنْسَ الإعجابَ به والاشتراكَ في القناة، وأخبِرْنا في التعليقات: هل كانت هذه المعلومة جديدة عليك؟ ولا تَنْسَ تفعيل زِرِّ الجرس ليصلَك كل جديد.",
-    "اضغط زِرَّ الإعجاب واشْتَرِكْ في القناة إن استفدت من هذا الفيديو، واكتب لنا في التعليقات الموضوع الذي تريد أن نتحدث عنه في الفيديو القادم، ولا تَنْسَ تفعيل زِرِّ الجرس لتكون أول من يعلم.",
+    "إنْ أَعْجَبَكَ هذا الفيديو فلا تَنْسَ الإعجابَ به والاشتراكَ في القناة، وأخبِرْنا في التعليقات: هل كانت هذه المعلومة جديدة عليك؟ ولا تَنْسَ تفعيل زِرِّ الجَرَس ليصلَكَ كل جديد.",
+    "اضغط زِرَّ الإعجاب واشْتَرِكْ في القناة إن استفدت من هذا الفيديو، واكتب لنا في التعليقات الموضوع الذي تريد أن نتحدث عنهُ في الفيديو القادم، ولا تَنْسَ تفعيل زِرِّ الجَرَس لتكون أول من يعلم.",
 ]
 
 
@@ -319,6 +322,76 @@ def _normalize_for_compare(s: str) -> str:
     s = _TASHKEEL_RE.sub("", s)
     s = re.sub(r"\s+", " ", s).strip()
     return s
+
+
+# --- Automated self-check: catch a missing pronoun diacritic before it ships ---
+# Both bugs fixed in CTA_OUTRO_VARIANTS above (ليصلَك -> ليصلَكَ، عنه -> عنهُ)
+# had the SAME shape: the "attached pronoun suffixes must always be
+# diacritized" rule was documented in the comment above CTA_OUTRO_VARIANTS,
+# but wasn't actually applied when that particular word was hand-typed. A
+# rule that only lives in a comment relies on someone re-reading and
+# re-checking it by eye every time the string is touched — exactly what
+# just failed twice. Enforcing it in code instead means a future edit that
+# reintroduces the same mistake fails LOUDLY, at import time, before a
+# single Groq/Pexels/TTS call is made, rather than shipping a mispronounced
+# video that a viewer has to point out.
+#
+# Attached pronouns are ك (you) and ه (him/it); a diacritic on that letter
+# is written as an EXTRA character immediately after it (Unicode combining
+# marks follow their base letter), so if ك or ه is genuinely the last
+# character of a word, it carries no vowel of its own. This can also
+# legitimately trip on a word where ك/ه is a plain ROOT letter rather than
+# an attached pronoun (e.g. a word that simply happens to end in ك or ه
+# with no real pronunciation risk) — those go in
+# _TASHKEEL_CHECK_ALLOWLIST below, each with a one-line reason, rather than
+# silently special-cased, so the allowlist stays a deliberate, reviewable
+# decision instead of quietly regrowing into the same blind spot.
+_TASHKEEL_CHECK_ALLOWLIST = {
+    "به",     # extremely common function word (bihi) — always reads the
+              # same way unvocalized; already left unmarked elsewhere in
+              # this same text (e.g. عليك, لنا) by the same convention.
+    "عليك",   # same as above — a fixed, unambiguous collocation.
+    "هذه",    # the ه here is part of the demonstrative's own spelling
+              # (hādhihi), not an attached pronoun — always reads one way.
+}
+
+
+def _find_unmarked_pronoun_suffixes(text: str) -> list[str]:
+    """Return every word in `text` that ends in a bare ك or ه (no
+    diacritic on that letter) and isn't in _TASHKEEL_CHECK_ALLOWLIST."""
+    offenders = []
+    for raw_word in text.split():
+        word = raw_word.strip(" ،.!؟\u061F:")
+        if not word or word in _TASHKEEL_CHECK_ALLOWLIST:
+            continue
+        if word[-1] in ("ك", "ه"):
+            offenders.append(word)
+    return offenders
+
+
+def _validate_fixed_arabic_strings() -> None:
+    """Run once at import time over every hand-written Arabic constant we
+    control (currently just CTA_OUTRO_VARIANTS) — see the block comment
+    above for why. Deliberately NOT applied to Groq's own narration_script
+    output: that text is dynamic and this same check would false-positive
+    constantly on legitimate root-letter ك/ه endings in arbitrary content;
+    Groq's output is governed instead by the tashkeel rules inside
+    SYSTEM_PROMPT."""
+    for i, variant in enumerate(CTA_OUTRO_VARIANTS, start=1):
+        offenders = _find_unmarked_pronoun_suffixes(variant)
+        if offenders:
+            raise PipelineError(
+                f"CTA_OUTRO_VARIANTS[{i}] has word(s) ending in a bare ك/ه with no "
+                f"diacritic on that letter: {offenders} — this is the exact bug "
+                f"class already found twice in production (ليصلَك، عنه). Add the "
+                f"missing tashkeel to the word itself, or if ك/ه here is genuinely "
+                f"a root letter with no real pronunciation risk, add the word to "
+                f"_TASHKEEL_CHECK_ALLOWLIST above with a one-line reason. "
+                f"Full string: {variant!r}"
+            )
+
+
+_validate_fixed_arabic_strings()
 
 
 def _fuzzy_word_pattern(word: str) -> str:
@@ -516,6 +589,10 @@ SYSTEM_PROMPT = textwrap.dedent(
           (مثل "اشترك" في الأمر، أو "لا تَنْسَ" في النهي) — ضع الحركات
           القصيرة على أحرفها لضمان النطق الصحيح لصيغة الأمر/النهي تحديداً لا
           صيغة أخرى.
+        • أي كلمة قصيرة شائعة ليس لها نطق افتراضي واضح بلا تشكيل (مثل "جرس"
+          التي تُقرأ خطأً في الإنتاج الفعلي بدون تشكيل) — شكّل حركاتها
+          الجذرية فقط (مثال: "جَرَس") دون تشكيل حرف النهاية ما لم يكن
+          ضرورياً.
     """
 ).strip()
 
