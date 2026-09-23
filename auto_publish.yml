@@ -1,12 +1,19 @@
-name: Auto publish videos (Cairo 08-15-19)
+name: Auto publish videos (Cairo 14:00 & 20:30)
 
 on:
   schedule:
-    # GitHub cron is UTC. UTC+03:00 local times:
-    # 08:00 = 05:00 UTC, 15:00 = 12:00 UTC, 19:00 = 16:00 UTC.
-    - cron: '0 5 * * *'
-    - cron: '0 12 * * *'
-    - cron: '0 16 * * *'
+    # Only 2 runs/day now, at the 2 strongest Shorts/Reels engagement
+    # windows (general posting-time data: peak watch-time clusters around
+    # 12:00-15:00 and 19:00-22:00 local; early morning is consistently the
+    # weakest slot for short-form video, so it was dropped). The two slots
+    # are also spaced 6.5 hours apart on purpose, so each video gets a full
+    # run at the algorithm before the next one goes up and starts
+    # competing with it for the same audience's attention.
+    #
+    # GitHub cron is UTC. UTC+03:00 local times (Cairo does not observe
+    # DST): 14:00 = 11:00 UTC, 20:30 = 17:30 UTC.
+    - cron: '0 11 * * *'
+    - cron: '30 17 * * *'
   workflow_dispatch:
 
 permissions:
@@ -26,19 +33,30 @@ jobs:
           echo "Cairo local time: $(date '+%Y-%m-%d %H:%M:%S %Z')"
 
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.11'
+
+      - name: Cache Whisper model
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: whisper-model-base
 
       - name: Install dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg
           python -m pip install --upgrade pip
-          pip install requests edge-tts
+          python -m pip install requests edge-tts faster-whisper
+          # Verify faster-whisper is importable from the SAME interpreter that
+          # will run main.py — catches a "pip installed but python can't see
+          # it" mismatch immediately, instead of discovering it later as a
+          # silent subtitle-sync fallback deep inside a run.
+          python -c "import faster_whisper; print('faster_whisper import OK:', faster_whisper.__file__)"
 
       - name: Generate and publish
         env:
@@ -52,10 +70,11 @@ jobs:
           MIN_AUDIO_SECONDS: '85'
           MAX_AUDIO_SECONDS: '89'
           TARGET_AUDIO_SECONDS: '87'
-          MIN_SCRIPT_WORDS: '145'
-          MAX_SCRIPT_WORDS: '155'
+          MIN_SCRIPT_WORDS: '135'
+          MAX_SCRIPT_WORDS: '165'
           MIN_SCENE_CLIPS: '4'
           TOPIC_HISTORY_FILE: 'topic_history.json'
+          WHISPER_MODEL: 'base'
         run: |
           echo "Python files in repository:"
           find . -maxdepth 2 -type f -name '*.py' -print
