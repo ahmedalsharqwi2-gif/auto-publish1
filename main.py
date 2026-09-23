@@ -610,41 +610,144 @@ SYSTEM_PROMPT = textwrap.dedent(
 # hard ceiling — scripts longer than this get trimmed at a sentence boundary
 # as a safety net, and MAX_AUDIO_SECONDS is a second, final safety net
 # checked against the *actual* generated audio duration before publishing.
+def _groq_chat(
+    messages: list[dict[str, str]],
+    max_completion_tokens: int = GROQ_MAX_COMPLETION_TOKENS,
+    temperature: float = 0.75,
+) -> str:
+    """Shared Groq chat-completion call, forcing a JSON-object response.
+    Used by both generate_topic (topic/script generation) and
+    proofread_narration_tashkeel (the tashkeel proofreading pass) — pulled
+    out to module level so a second Groq-backed step doesn't need its own
+    copy of the same request/retry/429-handling logic."""
+    payload = {
+        "model": GROQ_MODEL,
+        "messages": messages,
+        "response_format": {"type": "json_object"},
+        # Keep the completion budget bounded to reduce Groq TPM usage.
+        "max_completion_tokens": max_completion_tokens,
+        "reasoning_effort": "low",
+        "temperature": temperature,
+    }
+    resp = requests.post(
+        GROQ_ENDPOINT,
+        headers={
+            "Authorization": f"Bearer {GROQ_API_KEY}",
+            "Content-Type": "application/json",
+        },
+        json=payload,
+        timeout=60,
+    )
+    if resp.status_code == 429:
+        match = re.search(r"Please try again in\s+([0-9.]+)s", resp.text)
+        wait_seconds = min(max(float(match.group(1)) if match else 15.0, 3.0), 90.0)
+        log.warning("Groq rate limit (429); waiting %.1fs before retry", wait_seconds)
+        time.sleep(wait_seconds + 1.0)
+        raise PipelineError(f"Groq API rate limit (429) after waiting {wait_seconds:.1f}s")
+    if resp.status_code != 200:
+        raise PipelineError(f"Groq API error {resp.status_code}: {resp.text[:500]}")
+    data = resp.json()
+    raw_text = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+    if not raw_text:
+        raise PipelineError(f"Unexpected Groq response shape: {data}")
+    return raw_text
+
+
+# --- Stage 1 (preventive): proofread tashkeel before the TTS ever records it ---
+# The pipeline now has two independent layers of tashkeel QA, and they
+# catch different things on purpose:
+#   Stage 1 — proofread_narration_tashkeel() (this section): a dedicated
+#     Groq proofreading pass that reviews the narration_script Groq JUST
+#     generated, fixing missing/wrong diacritics BEFORE generate_tts ever
+#     records it. Preventive — a fixed word is never spoken wrong at all.
+#   Stage 2 — align_words_with_whisper()'s pronunciation_review (see that
+#     section): runs on the ACTUAL rendered audio, after the fact. It
+#     catches whatever Stage 1 missed, AND anything that isn't a tashkeel
+#     problem at all (a TTS engine quirk unrelated to how the text was
+#     vocalized). The two layers are complementary, not redundant — Stage
+#     1 reduces how often Stage 2 has anything to flag; it can't replace it,
+#     because no proofreading pass over TEXT can catch an engine-level
+#     mispronunciation that only shows up in the AUDIO.
+PROOFREAD_SYSTEM_PROMPT = textwrap.dedent(
+    """
+    أنت مدقق لغوي متخصص في التشكيل الكامل للعربية الفصحى. سيصلك نص عربي
+    مُشكَّل بالفعل (وليس عارياً من التشكيل) بالكامل تقريباً، ومهمتك مراجعته
+    وتصحيح أي خطأ أو نقص في التشكيل فقط — لا تُعِد صياغة النص، ولا تُغيّر
+    أي كلمة، ولا تُضيف أو تحذف أي محتوى، ولا تُغيّر ترتيب الكلمات. غيّر
+    الحركات فقط حيث تكون خاطئة أو ناقصة نحوياً.
+
+    ركّز بالذات على هذين النوعين من الأخطاء لأنهما تكررا فعلياً في الإنتاج
+    الحقيقي رغم وجود تعليمات صريحة بتفاديهما:
+    1. الضمائر المتصلة بآخر الفعل أو الاسم (ـكَ، ـهُ، ـهَا، ـكُمْ، ـنَا...)
+       يجب أن تحمل كل واحدة منها حركتها الخاصة دائماً، منفصلة عن حركة
+       الحرف الذي قبلها مباشرة. لو لقيت ضميراً متصلاً بلا أي حركة إطلاقاً
+       (مثل "لك" بدل "لَكَ"، أو "عنه" بدل "عنهُ")، أضف الحركة الناقصة على
+       الضمير نفسه.
+    2. أي كلمة قصيرة شائعة أو متشابهة رسماً بكلمة أخرى مختلفة النطق (زي
+       "زر" الذي قد يُقرأ خطأً كفعل أمر من "زار") ولم تُشكَّل بالكامل.
+    راجع أيضاً بقية الحركات نحوياً (حالة الفعل، حالة الاسم، صيغ الأمر
+    والمضارع) وصحّح أي خطأ نحوي واضح في حركة موجودة بالفعل.
+
+    أجب حصراً بكائن JSON بمفتاح واحد فقط: {"corrected_text": "النص الكامل
+    بعد التصحيح، بنفس عدد الكلمات والترتيب والمعنى تماماً"}. أي تغيير في
+    عدد الكلمات أو معناها غير مقبول إطلاقاً — أنت مدقق تشكيل فقط، لست
+    كاتباً.
+    """
+).strip()
+
+
+def proofread_narration_tashkeel(script: str) -> str:
+    """Best-effort Stage-1 tashkeel proofreading (see the block comment
+    above) — sends `script` back through Groq as a dedicated proofreading
+    pass and returns the corrected text.
+
+    Guards against the proofreading call doing more than proofreading: if
+    the call fails outright, returns malformed JSON, or the "corrected"
+    text's word count differs from the original (a sign it rewrote or
+    dropped content instead of only touching diacritics), this discards
+    the result and returns the ORIGINAL script unchanged. A missed
+    tashkeel fix is a much smaller risk than silently losing a sentence —
+    and Stage 2 (Whisper) is still there as a safety net either way.
+    """
+    def _call() -> str:
+        messages = [
+            {"role": "system", "content": PROOFREAD_SYSTEM_PROMPT},
+            {"role": "user", "content": json.dumps({"text": script}, ensure_ascii=False)},
+        ]
+        raw_text = _groq_chat(messages, max_completion_tokens=GROQ_MAX_COMPLETION_TOKENS, temperature=0.2)
+        parsed = extract_json_block(raw_text)
+        corrected = str(parsed.get("corrected_text", "")).strip()
+        if not corrected:
+            raise PipelineError("Proofreading pass returned an empty corrected_text")
+        return corrected
+
+    try:
+        corrected = with_retries(_call, what="Groq tashkeel proofreading")
+    except PipelineError as exc:
+        log.warning(
+            "Tashkeel proofreading failed (%s); keeping the narration_script exactly as Groq "
+            "first generated it",
+            exc,
+        )
+        return script
+
+    orig_word_count = len(_normalize_for_compare(script).split())
+    corrected_word_count = len(_normalize_for_compare(corrected).split())
+    if corrected_word_count != orig_word_count:
+        log.warning(
+            "Tashkeel proofreading changed the word count (%d -> %d words); discarding the "
+            "proofread version and keeping the original — this pass must only touch "
+            "diacritics, never content",
+            orig_word_count, corrected_word_count,
+        )
+        return script
+
+    log.info("Tashkeel proofreading pass applied (%d words, unchanged count)", corrected_word_count)
+    return corrected
+
+
 def generate_topic() -> Topic:
     log.info("Generating viral topic via Groq (%s)...", GROQ_MODEL)
-
-    def _groq_chat(messages: list[dict[str, str]]) -> str:
-        payload = {
-            "model": GROQ_MODEL,
-            "messages": messages,
-            "response_format": {"type": "json_object"},
-            # Keep the completion budget bounded to reduce Groq TPM usage.
-            "max_completion_tokens": GROQ_MAX_COMPLETION_TOKENS,
-            "reasoning_effort": "low",
-            "temperature": 0.75,
-        }
-        resp = requests.post(
-            GROQ_ENDPOINT,
-            headers={
-                "Authorization": f"Bearer {GROQ_API_KEY}",
-                "Content-Type": "application/json",
-            },
-            json=payload,
-            timeout=60,
-        )
-        if resp.status_code == 429:
-            match = re.search(r"Please try again in\s+([0-9.]+)s", resp.text)
-            wait_seconds = min(max(float(match.group(1)) if match else 15.0, 3.0), 90.0)
-            log.warning("Groq rate limit (429); waiting %.1fs before retry", wait_seconds)
-            time.sleep(wait_seconds + 1.0)
-            raise PipelineError(f"Groq API rate limit (429) after waiting {wait_seconds:.1f}s")
-        if resp.status_code != 200:
-            raise PipelineError(f"Groq API error {resp.status_code}: {resp.text[:500]}")
-        data = resp.json()
-        raw_text = data.get("choices", [{}])[0].get("message", {}).get("content", "")
-        if not raw_text:
-            raise PipelineError(f"Unexpected Groq response shape: {data}")
-        return raw_text
 
     def _parse_topic(raw_text: str) -> tuple[Topic, int]:
         parsed = extract_json_block(raw_text)
@@ -1803,6 +1906,14 @@ def run_pipeline() -> None:
     log.info("Run directory: %s", run_dir)
 
     topic = generate_topic()
+
+    # Stage 1 tashkeel QA (see the block comment above
+    # proofread_narration_tashkeel) — runs BEFORE anything is recorded, so
+    # a caught diacritic mistake is never actually spoken. topic.json below
+    # is written with the already-proofread script, so the saved record
+    # always matches exactly what generate_tts receives.
+    topic.narration_script = proofread_narration_tashkeel(topic.narration_script)
+
     (run_dir / "topic.json").write_text(
         json.dumps(topic.__dict__, ensure_ascii=False, indent=2), encoding="utf-8"
     )
