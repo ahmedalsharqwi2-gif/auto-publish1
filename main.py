@@ -80,7 +80,7 @@ TARGET_AUDIO_SECONDS = float(os.getenv("TARGET_AUDIO_SECONDS", "87"))
 MIN_SCRIPT_WORDS = int(os.getenv("MIN_SCRIPT_WORDS", "120"))
 MAX_SCRIPT_WORDS = int(os.getenv("MAX_SCRIPT_WORDS", "165"))
 HISTORY_LIMIT = int(os.getenv("HISTORY_LIMIT", "200"))
-MIN_SCENE_CLIPS = int(os.getenv("MIN_SCENE_CLIPS", "4"))
+MIN_SCENE_CLIPS = int(os.getenv("MIN_SCENE_CLIPS", "10"))
 
 def _clean_env(name: str) -> str | None:
     """Read an env var and strip ALL whitespace/newline characters from it.
@@ -143,7 +143,7 @@ PEXELS_SEARCH_ENDPOINT = "https://api.pexels.com/videos/search"
 # scenes frequently had nothing to do with the script's topic. Keeping this
 # small preserves Pexels's relevance ranking while still giving some
 # variety across runs that reuse the same search phrase.
-TOP_RELEVANT_CANDIDATES = int(os.getenv("TOP_RELEVANT_CANDIDATES", "4"))
+TOP_RELEVANT_CANDIDATES = int(os.getenv("TOP_RELEVANT_CANDIDATES", "8"))
 BUFFER_ENDPOINT = "https://api.buffer.com"
 GITHUB_API_BASE = "https://api.github.com"
 
@@ -498,7 +498,7 @@ SYSTEM_PROMPT = textwrap.dedent(
       "caption": "كابشن للمنشور بالعربية، 1-3 جمل",
       "hashtags": ["#وسم1", "#وسم2", "#وسم3", "#وسم4", "#وسم5"],
       "search_keywords_en": "SHORT general-subject phrase in 2-3 simple English words ONLY (e.g. 'ancient egypt', 'deep ocean', 'human brain sleep'). Never a comma-separated list of synonyms (e.g. NEVER 'human sleep, prolonged sleep, hypersomnia') — this exact string is prefixed to every scene search below, so a long or repetitive value makes all scene searches look identical to the stock-video engine and return duplicate clips.",
-      "scene_keywords_en": ["4-7 English stock-footage search phrases, one per visual scene, in the exact order of the narration. Each phrase MUST name a concrete, filmable subject that is actually mentioned in that part of the script (a specific animal, place, object, body part, or activity) — never a vague abstract word like 'mystery', 'ancient', or 'nature' on its own, since stock sites match those to random unrelated footage. Start each phrase with the topic's general subject (e.g. 'ancient egypt', 'deep ocean', 'human brain') then add the specific visual detail."]
+      "scene_keywords_en": ["10-14 English stock-footage search phrases, one per visual scene, in the exact order of the narration. Each phrase MUST name a concrete, filmable subject that is actually mentioned in that part of the script (a specific animal, place, object, body part, or activity) — never a vague abstract word like 'mystery', 'ancient', or 'nature' on its own, since stock sites match those to random unrelated footage. Start each phrase with the topic's general subject (e.g. 'ancient egypt', 'deep ocean', 'human brain') then add the specific visual detail."]
     }
 
     تعليمات إلزامية بخصوص الهوك (لا تتجاهلها إطلاقاً — هذا أهم جزء في الفيديو كله؛
@@ -567,7 +567,7 @@ SYSTEM_PROMPT = textwrap.dedent(
 
     تعليمات إلزامية بخصوص الطول (لا تتجاهلها):
     - حقل narration_script (شاملاً hook_text في بدايته) يجب أن يحتوي من أول استجابة على 120-165 كلمة عربية؛ لا تكتب نصاً أقصر من 120 كلمة.
-    - scene_keywords_en إلزامي ويجب أن يحتوي على 4-7 عبارات مطابقة للشروط أعلاه.
+    - scene_keywords_en إلزامي ويجب أن يحتوي على 10-14 عبارات مطابقة للشروط أعلاه.
     - عدّ الكلمات فعلياً قبل إنهاء الإجابة، ولا تُسلّم نصاً أطول أو أقصر من المطلوب.
 
     تعليمات إلزامية بخصوص اللغة والتشكيل (لا تتجاهلها):
@@ -860,7 +860,7 @@ def search_pexels_video(keywords: str, exclude: set[str] | None = None) -> str:
         resp = requests.get(
             PEXELS_SEARCH_ENDPOINT,
             headers={"Authorization": PEXELS_API_KEY},
-            params={"query": keywords, "orientation": "portrait", "size": "large", "per_page": 15},
+            params={"query": keywords, "orientation": "portrait", "size": "large", "per_page": 40},
             timeout=30,
         )
         if resp.status_code != 200:
@@ -877,9 +877,10 @@ def search_pexels_video(keywords: str, exclude: set[str] | None = None) -> str:
         # top candidates have a usable portrait file, fall through to the
         # rest of the page (still in Pexels's original relevance order)
         # rather than failing the scene outright.
-        top_candidates = videos[:TOP_RELEVANT_CANDIDATES]
-        random.shuffle(top_candidates)
-        ordered_videos = top_candidates + videos[TOP_RELEVANT_CANDIDATES:]
+        # Keep Pexels' relevance ranking intact. Randomizing these results can
+        # replace a highly relevant clip with a generic one, which is exactly
+        # what caused unrelated footage to appear in earlier runs.
+        ordered_videos = videos
         for video in ordered_videos:
             files = [
                 f for f in video.get("video_files", [])
@@ -929,17 +930,12 @@ def search_pexels_videos(keywords_list: list[str], topic_context: str = "") -> l
     for keywords in keywords_list:
         combined = f"{topic_context} {keywords}".strip() if topic_context else keywords
         try:
+            # Do not fall back to a bare/generic scene query: that fallback was
+            # the source of random footage unrelated to the video's subject.
             url = search_pexels_video(combined, exclude=set(urls))
-        except PipelineError:
-            if combined == keywords:
-                log.warning("No clip for scene %r", keywords)
-                continue
-            log.warning("No results for %r; retrying with scene keywords alone: %r", combined, keywords)
-            try:
-                url = search_pexels_video(keywords, exclude=set(urls))
-            except PipelineError as exc:
-                log.warning("No clip for scene %r: %s", keywords, exc)
-                continue
+        except PipelineError as exc:
+            log.warning("Skipping scene %r because its topic-specific query failed: %s", keywords, exc)
+            continue
         if url not in urls:
             urls.append(url)
     if len(urls) < MIN_SCENE_CLIPS:
