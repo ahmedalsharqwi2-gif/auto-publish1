@@ -79,6 +79,12 @@ MAX_AUDIO_SECONDS = float(os.getenv("MAX_AUDIO_SECONDS", "89"))
 TARGET_AUDIO_SECONDS = float(os.getenv("TARGET_AUDIO_SECONDS", "87"))
 MIN_SCRIPT_WORDS = int(os.getenv("MIN_SCRIPT_WORDS", "120"))
 MAX_SCRIPT_WORDS = int(os.getenv("MAX_SCRIPT_WORDS", "165"))
+# Topic generation is the one step whose failures are inherently about
+# content quality/length rather than a network hiccup, so it gets more
+# attempts than the generic MAX_RETRIES (3) used everywhere else — 3 was
+# tight enough that a single Groq rate limit (429) plus one short draft
+# could exhaust the whole budget before a good script ever came through.
+TOPIC_GENERATION_MAX_ATTEMPTS = int(os.getenv("TOPIC_GENERATION_MAX_ATTEMPTS", "5"))
 HISTORY_LIMIT = int(os.getenv("HISTORY_LIMIT", "200"))
 MIN_SCENE_CLIPS = int(os.getenv("MIN_SCENE_CLIPS", "10"))
 
@@ -135,6 +141,13 @@ TTS_VOICE = os.getenv("TTS_VOICE", "ar-EG-SalmaNeural")
 GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
 GROQ_MAX_COMPLETION_TOKENS = int(os.getenv("GROQ_MAX_COMPLETION_TOKENS", "2200"))
 GROQ_ENDPOINT = "https://api.groq.com/openai/v1/chat/completions"
+# A Groq 429 used to be turned into a PipelineError immediately, which meant
+# it silently ate one of generate_topic()'s own limited content-generation
+# attempts (see with_retries) even though it has nothing to do with content
+# quality. _groq_chat now absorbs 429s itself, up to this many tries, so a
+# transient rate limit no longer costs a real "the script came out too
+# short" retry.
+GROQ_RATE_LIMIT_MAX_RETRIES = int(os.getenv("GROQ_RATE_LIMIT_MAX_RETRIES", "4"))
 PEXELS_SEARCH_ENDPOINT = "https://api.pexels.com/videos/search"
 # How many of Pexels's own top (most-relevant) results to randomize among.
 # search_pexels_video() used to shuffle across the FULL up-to-15-result page
@@ -233,17 +246,18 @@ def check_env() -> None:
         raise PipelineError(f"Missing required environment variables: {', '.join(missing)}")
 
 
-def with_retries(fn, *args, what: str = "operation", **kwargs):
+def with_retries(fn, *args, what: str = "operation", max_retries: int | None = None, **kwargs):
+    attempts = max_retries if max_retries is not None else MAX_RETRIES
     last_err: Exception | None = None
-    for attempt in range(1, MAX_RETRIES + 1):
+    for attempt in range(1, attempts + 1):
         try:
             return fn(*args, **kwargs)
         except Exception as exc:  # noqa: BLE001
             last_err = exc
-            log.warning("Attempt %d/%d for %s failed: %s", attempt, MAX_RETRIES, what, exc)
-            if attempt < MAX_RETRIES:
+            log.warning("Attempt %d/%d for %s failed: %s", attempt, attempts, what, exc)
+            if attempt < attempts:
                 time.sleep(RETRY_BACKOFF_SECONDS * attempt)
-    raise PipelineError(f"{what} failed after {MAX_RETRIES} attempts: {last_err}") from last_err
+    raise PipelineError(f"{what} failed after {attempts} attempts: {last_err}") from last_err
 
 
 def _trim_script_to_word_limit(script: str, max_words: int) -> str:
@@ -295,6 +309,18 @@ CTA_OUTRO_VARIANTS = [
     "إنْ أَعْجَبَكَ هذا الفيديو فلا تَنْسَ الإعجابَ به والاشتراكَ في القناة، وأخبِرْنا في التعليقات: هل كانت هذه المعلومة جديدة عليك؟ ولا تَنْسَ تفعيل زِرِّ الجَرَس ليصلَكَ كل جديد.",
     "اضغط زِرَّ الإعجاب واشْتَرِكْ في القناة إن استفدت من هذا الفيديو، واكتب لنا في التعليقات الموضوع الذي تريد أن نتحدث عنهُ في الفيديو القادم، ولا تَنْسَ تفعيل زِرِّ الجَرَس لتكون أول من يعلم.",
 ]
+
+# The two constants below turn "the outro adds roughly 30 words" (previously
+# just an assumption baked silently into MIN/MAX_SCRIPT_WORDS handling) into
+# an exact, derived fact. generate_topic() uses OUTRO_MIN_WORDS to work out
+# how much of a shortfall the outro can and can't be trusted to cover on its
+# own — the root cause of the "narration_script only N words even after the
+# engagement outro" failures was that a script needed real expansion, not
+# just the outro, to clear MIN_SCRIPT_WORDS. OUTRO_MAX_WORDS is used
+# symmetrically so trimming an over-long script also leaves room for
+# whichever variant random.choice() ends up picking.
+OUTRO_MIN_WORDS = min(len(v.split()) for v in CTA_OUTRO_VARIANTS)
+OUTRO_MAX_WORDS = max(len(v.split()) for v in CTA_OUTRO_VARIANTS)
 
 
 def _append_engagement_outro(script: str, min_words: int) -> str:
@@ -629,28 +655,42 @@ def _groq_chat(
         "reasoning_effort": "low",
         "temperature": temperature,
     }
-    resp = requests.post(
-        GROQ_ENDPOINT,
-        headers={
-            "Authorization": f"Bearer {GROQ_API_KEY}",
-            "Content-Type": "application/json",
-        },
-        json=payload,
-        timeout=60,
+
+    # 429s are handled in their own loop, separate from with_retries, so a
+    # rate limit never costs the caller one of its own (much scarcer)
+    # attempts — see GROQ_RATE_LIMIT_MAX_RETRIES above. Only a persistent
+    # rate limit (or a non-429 failure) is raised out to the caller.
+    for rate_limit_attempt in range(1, GROQ_RATE_LIMIT_MAX_RETRIES + 1):
+        resp = requests.post(
+            GROQ_ENDPOINT,
+            headers={
+                "Authorization": f"Bearer {GROQ_API_KEY}",
+                "Content-Type": "application/json",
+            },
+            json=payload,
+            timeout=60,
+        )
+        if resp.status_code == 429:
+            match = re.search(r"Please try again in\s+([0-9.]+)s", resp.text)
+            wait_seconds = min(max(float(match.group(1)) if match else 15.0, 3.0), 90.0)
+            log.warning(
+                "Groq rate limit (429); waiting %.1fs before retry (%d/%d) — not counted "
+                "against the caller's own retry budget",
+                wait_seconds, rate_limit_attempt, GROQ_RATE_LIMIT_MAX_RETRIES,
+            )
+            time.sleep(wait_seconds + 1.0)
+            continue
+        if resp.status_code != 200:
+            raise PipelineError(f"Groq API error {resp.status_code}: {resp.text[:500]}")
+        data = resp.json()
+        raw_text = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+        if not raw_text:
+            raise PipelineError(f"Unexpected Groq response shape: {data}")
+        return raw_text
+
+    raise PipelineError(
+        f"Groq API rate limit (429) persisted after {GROQ_RATE_LIMIT_MAX_RETRIES} internal retries"
     )
-    if resp.status_code == 429:
-        match = re.search(r"Please try again in\s+([0-9.]+)s", resp.text)
-        wait_seconds = min(max(float(match.group(1)) if match else 15.0, 3.0), 90.0)
-        log.warning("Groq rate limit (429); waiting %.1fs before retry", wait_seconds)
-        time.sleep(wait_seconds + 1.0)
-        raise PipelineError(f"Groq API rate limit (429) after waiting {wait_seconds:.1f}s")
-    if resp.status_code != 200:
-        raise PipelineError(f"Groq API error {resp.status_code}: {resp.text[:500]}")
-    data = resp.json()
-    raw_text = data.get("choices", [{}])[0].get("message", {}).get("content", "")
-    if not raw_text:
-        raise PipelineError(f"Unexpected Groq response shape: {data}")
-    return raw_text
 
 
 # --- Stage 1 (preventive): proofread tashkeel before the TTS ever records it ---
@@ -746,6 +786,102 @@ def proofread_narration_tashkeel(script: str) -> str:
     return corrected
 
 
+# --- Active length correction: top up a short narration_script instead of hoping ---
+# Root cause of the "narration_script only N words even after the engagement
+# outro; Groq output was too short" failures: Groq regularly undershoots the
+# requested 120-165 (ideally ~140) word count by 20-40 words, and the only
+# corrective mechanisms that existed were (1) retrying topic generation from
+# scratch, which has the same odds of coming up short again, and (2)
+# appending the fixed CTA outro (see CTA_OUTRO_VARIANTS), which only ever
+# adds OUTRO_MIN_WORDS-OUTRO_MAX_WORDS (~28-33) words — nowhere near enough
+# to cover a 100-word draft. expand_narration_script() closes that gap
+# directly: it sends the short script back to Groq with instructions to ONLY
+# add extra sentences (never reword or shorten what's already there) until
+# it reaches a safe target length, before the CTA outro is appended on top.
+EXPAND_SYSTEM_PROMPT = textwrap.dedent(
+    """
+    أنت كاتب سكريبتات محترف بالعربية الفصحى المشكَّلة تشكيلاً كاملاً. سيصلك نص
+    سردي قصير جاء أقصر من الطول المطلوب، ومهمتك فقط إطالته عن طريق إضافة جملة
+    أو جملتين إضافيتين، بنفس الأسلوب والموضوع، تحتويان على تفاصيل حقيقية
+    وموثوقة إضافية تخدم نفس الفكرة.
+
+    ممنوع منعاً باتاً: حذف أي كلمة من النص الأصلي، أو إعادة صياغة أي جملة
+    موجودة بالفعل، أو تكرار معلومة وردت فيه، أو تغيير سؤال الافتتاح (أول
+    جملة) أو المعنى العام للنص. النص الأصلي بالكامل يجب أن يظهر داخل النص
+    النهائي دون أي تعديل، والإضافة الجديدة فقط هي الفرق بينهما.
+
+    أضف الجملة/الجملتين الجديدتين في أنسب موضع (عادة قبل آخر جملة في النص)،
+    مع تشكيل كامل على كل حرف بنفس معايير التشكيل المستخدمة في بقية النص
+    (تشكيل الإعراب، وحركة الضمائر المتصلة منفصلة عن حركة الحرف الذي قبلها).
+
+    أجب حصراً بكائن JSON بمفتاح واحد فقط: {"expanded_text": "النص الكامل
+    الأصلي دون أي حذف، بعد إضافة الجملة/الجملتين الجديدتين"}.
+    """
+).strip()
+
+
+def expand_narration_script(script: str, target_min_words: int) -> str:
+    """Best-effort: ask Groq to ADD 1-2 sentences to `script` (never remove
+    or reword existing ones) until it clears target_min_words words.
+
+    Guarded the same way as proofread_narration_tashkeel: if the call
+    fails, returns malformed JSON, or the "expanded" text doesn't look like
+    a strict addition (fewer/equal words, or the start no longer closely
+    matches the original — a sign Groq rewrote instead of extended), the
+    original script is returned unchanged. A missed expansion just means
+    generate_topic's own retry loop tries again; it's never worse than
+    what happened before this function existed.
+    """
+    def _call() -> str:
+        messages = [
+            {"role": "system", "content": EXPAND_SYSTEM_PROMPT},
+            {"role": "user", "content": json.dumps(
+                {
+                    "text": script,
+                    "current_word_count": len(script.split()),
+                    "target_minimum_word_count": target_min_words,
+                },
+                ensure_ascii=False,
+            )},
+        ]
+        raw_text = _groq_chat(messages, max_completion_tokens=GROQ_MAX_COMPLETION_TOKENS, temperature=0.6)
+        parsed = extract_json_block(raw_text)
+        expanded = str(parsed.get("expanded_text", "")).strip()
+        if not expanded:
+            raise PipelineError("Expansion pass returned an empty expanded_text")
+        return expanded
+
+    try:
+        expanded = with_retries(_call, what="Groq narration expansion")
+    except PipelineError as exc:
+        log.warning("Narration expansion failed (%s); keeping the short script as-is", exc)
+        return script
+
+    orig_words = _normalize_for_compare(script).split()
+    expanded_words = _normalize_for_compare(expanded).split()
+    if len(expanded_words) <= len(orig_words):
+        log.warning(
+            "Narration expansion did not add words (%d -> %d); keeping the original",
+            len(orig_words), len(expanded_words),
+        )
+        return script
+    # Cheap "this looks like an addition, not a rewrite" check: the expanded
+    # text's own words, compared against the original, should still be
+    # highly similar overall (an addition changes little of the existing
+    # text; a rewrite changes a lot of it even when it's also longer).
+    similarity = difflib.SequenceMatcher(None, orig_words, expanded_words).ratio()
+    if similarity < 0.75:
+        log.warning(
+            "Narration expansion looks like a rewrite rather than a pure addition "
+            "(similarity %.2f); keeping the original",
+            similarity,
+        )
+        return script
+
+    log.info("Narration expanded from %d to %d words", len(orig_words), len(expanded_words))
+    return expanded
+
+
 def generate_topic() -> Topic:
     log.info("Generating viral topic via Groq (%s)...", GROQ_MODEL)
 
@@ -801,19 +937,42 @@ def generate_topic() -> Topic:
         raw_text = _groq_chat(messages)
         topic, word_count = _parse_topic(raw_text)
 
-        if word_count > MAX_SCRIPT_WORDS:
+        # MIN_SCRIPT_WORDS/MAX_SCRIPT_WORDS bound the FINAL script — Groq's
+        # narration plus the fixed CTA outro appended below — since that
+        # combined text is what actually gets spoken/subtitled. Trimming or
+        # expanding the pre-outro draft has to leave room for whichever
+        # outro variant random.choice() ends up picking: OUTRO_MAX_WORDS for
+        # the trim ceiling and OUTRO_MIN_WORDS for the expansion floor keep
+        # the final total safely inside MIN_SCRIPT_WORDS..MAX_SCRIPT_WORDS
+        # either way.
+        pre_outro_max = MAX_SCRIPT_WORDS - OUTRO_MAX_WORDS
+        pre_outro_min = MIN_SCRIPT_WORDS - OUTRO_MIN_WORDS
+
+        if word_count > pre_outro_max:
             log.warning(
-                "narration_script too long (%d words > %d); trimming at a sentence boundary "
-                "to stay within the Facebook Reels 90s cap",
-                word_count, MAX_SCRIPT_WORDS,
+                "narration_script too long (%d words > %d incl. outro headroom); trimming at a "
+                "sentence boundary to stay within the Facebook Reels 90s cap",
+                word_count, pre_outro_max,
             )
-            topic.narration_script = _trim_script_to_word_limit(topic.narration_script, MAX_SCRIPT_WORDS)
-        elif word_count < MIN_SCRIPT_WORDS:
+            topic.narration_script = _trim_script_to_word_limit(topic.narration_script, pre_outro_max)
+            word_count = len(topic.narration_script.split())
+        elif word_count < pre_outro_min:
+            # This is the actual fix for the recurring "Groq output was too
+            # short" failure: a script this far under target used to just
+            # get a warning and the fixed CTA outro appended on top, which
+            # can only ever add OUTRO_MIN_WORDS-OUTRO_MAX_WORDS (~28-33)
+            # words — nowhere near enough when Groq hands back ~100 words
+            # instead of the requested ~140. Actively expand it first
+            # instead of hoping. A few extra words of margin (+5) are
+            # requested on top of pre_outro_min so the final total isn't
+            # left sitting right on the edge of MIN_SCRIPT_WORDS.
             log.warning(
-                "narration_script short (%d words) before the outro; appending the fixed "
-                "engagement outro to close the gap",
-                word_count,
+                "narration_script short (%d words, need >=%d before the outro); asking Groq to "
+                "expand it instead of relying on the outro alone",
+                word_count, pre_outro_min,
             )
+            topic.narration_script = expand_narration_script(topic.narration_script, pre_outro_min + 5)
+            word_count = len(topic.narration_script.split())
 
         # Always close every video with exactly one of the fixed
         # subscribe/like/comment/bell outros (see CTA_OUTRO_VARIANTS) — not
@@ -822,9 +981,14 @@ def generate_topic() -> Topic:
         topic.narration_script = _append_engagement_outro(topic.narration_script, MIN_SCRIPT_WORDS)
         word_count = len(topic.narration_script.split())
         if word_count < MIN_SCRIPT_WORDS:
+            # Should be rare now that a short draft is actively expanded
+            # above — this stays only as a last-resort safety net (e.g. the
+            # expansion pass itself failed) so an under-length video is
+            # never published silently. with_retries below still picks this
+            # up as one more topic-generation attempt.
             raise PipelineError(
-                f"narration_script only {word_count} words even after the engagement outro; "
-                "Groq output was too short"
+                f"narration_script only {word_count} words even after expansion and the "
+                "engagement outro; Groq output was too short"
             )
 
         if len(topic.scene_keywords_en) < MIN_SCENE_CLIPS:
@@ -840,7 +1004,7 @@ def generate_topic() -> Topic:
             raise PipelineError("Generated topic is too similar to a previously published topic")
         return topic
 
-    topic = with_retries(_call, what="Groq topic generation")
+    topic = with_retries(_call, what="Groq topic generation", max_retries=TOPIC_GENERATION_MAX_ATTEMPTS)
     log.info(
         "Topic generated: %s (%d-word script, ~%.0fs at 1.75 words/sec)",
         topic.title, len(topic.narration_script.split()), len(topic.narration_script.split()) / 1.75,
