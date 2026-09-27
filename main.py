@@ -192,6 +192,7 @@ RETRY_BACKOFF_SECONDS = 5
 # your track elsewhere. If neither is available, the pipeline simply
 # publishes without music instead of failing the run.
 BG_MUSIC_URL = _clean_env("BG_MUSIC_URL")
+MUSIC_VOLUME = float(os.getenv("MUSIC_VOLUME", "0.07"))
 MUSIC_DIR = Path(__file__).resolve().parent / "music"
 # Verified public repository track used only when no local track or user URL is
 # configured. If GitHub is unreachable, generate_ambient_music() is used.
@@ -762,7 +763,15 @@ CONTENT_RED_FLAGS = ("السيلينس", "الشهرات الجوية", "الم�
 
 def find_content_red_flag(text: str) -> str | None:
     plain = re.sub(r"[\u064B-\u065F\u0670]", "", text or "")
-    return next((flag for flag in CONTENT_RED_FLAGS if flag in plain), None)
+    for flag in CONTENT_RED_FLAGS:
+        for match in re.finditer(re.escape(flag), plain):
+            context_before = plain[max(0, match.start() - 70):match.start()]
+            context_after = plain[match.end():match.end() + 70]
+            negated = re.search(r"(?:لا|ليس|ليست|غير|غيرُ|غير موجود|غير معتمد|وصف.*غير دقيق|لا يسمى|لا تسمى|لا يطلق|لا تطلق)\s*$", context_before)
+            corrected = re.search(r"(?:غير دقيق|غير صحيحة|غير صحيح|لا وجود|لا توجد|ليست.*حقيقة)", context_after)
+            if not (negated or corrected):
+                return flag
+    return None
 
 
 def proofread_narration_tashkeel(script: str) -> str:
@@ -1835,7 +1844,7 @@ def assemble_video(
         filter_complex = (
             f"[2:a]aloop=loop=-1:size=2e9,atrim=0:{audio_duration:.2f},"
             f"afade=t=in:st=0:d=1.5,afade=t=out:st={max(audio_duration - 1.5, 0):.2f}:d=1.5,"
-            f"volume=0.15[music];"
+            f"volume={MUSIC_VOLUME}[music];"
             f"[1:a][music]amix=inputs=2:duration=first:dropout_transition=2:normalize=0[aout]"
         )
         cmd = [
