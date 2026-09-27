@@ -519,6 +519,11 @@ SYSTEM_PROMPT = textwrap.dedent(
     آية أو معجزة إلى الدين دون تحقق، ولا تخلط بين الحقيقة والرواية الشعبية.
     وفي الموضوعات الطبية والعلمية والتاريخية لا تختلق أرقاماً أو ادعاءات، وميّز بوضوح
     بين الحقيقة المثبتة والفرضية والحكاية المتداولة.
+    قبل إخراج JSON راجع كل جملة كمدقق علمي: لا توجد وحدة قياس أو عملية أو مصطلح
+    غير معتمد، ولا تشرح الظاهرة بعلاقة سببية غير صحيحة. إذا كان السؤال مبنياً
+    على خرافة أو وصف فيروسي مضلل، اجعل الإجابة تصحح الخرافة صراحةً، واختر موضوعاً
+    آخر إذا لم تستطع صياغة تفسير موثوق. راجع العربية كلمة كلمة؛ لا تسلّم مسودة
+    أولى أو ترجمة حرفية، ولا تستخدم التشكيل لإخفاء كلمة غير صحيحة. لا تستخدم مصطلحاً علمياً أو وحدة قياس غير معتمدة، ولا تبرر ادعاءً فيروسياً خاطئاً بتفسير مختلق.
 
     اختر موضوعاً لم يُستهلك بشكل مبتذل، وله معدل جذب مرتفع (High Hook Rate) في أول
     3 ثوانٍ (High-CTR). أجب حصراً بكائن JSON صالح دون أي نص إضافي أو علامات كود،
@@ -716,84 +721,67 @@ def _groq_chat(
 #     1 reduces how often Stage 2 has anything to flag; it can't replace it,
 #     because no proofreading pass over TEXT can catch an engine-level
 #     mispronunciation that only shows up in the AUDIO.
+# --- Stage 1: mandatory Arabic + factual editorial review before TTS ---
 PROOFREAD_SYSTEM_PROMPT = textwrap.dedent(
     """
-    أنت مدقق لغوي متخصص في التشكيل الكامل للعربية الفصحى. سيصلك نص عربي
-    مُشكَّل بالفعل (وليس عارياً من التشكيل) بالكامل تقريباً، ومهمتك مراجعته
-    وتصحيح أي خطأ أو نقص في التشكيل فقط — لا تُعِد صياغة النص، ولا تُغيّر
-    أي كلمة، ولا تُضيف أو تحذف أي محتوى، ولا تُغيّر ترتيب الكلمات. غيّر
-    الحركات فقط حيث تكون خاطئة أو ناقصة نحوياً.
+    أنت محرر عربي فصيح ومدقق علمي صارم، ولست مدقق تشكيل فقط. سيصلك نص قصير
+    مرشح للنشر. أعد كتابته كاملاً بعد إصلاح النحو والصرف والأسلوب، والتحقق من
+    المنطق العلمي والتاريخي داخل النص.
 
-    ركّز بالذات على هذين النوعين من الأخطاء لأنهما تكررا فعلياً في الإنتاج
-    الحقيقي رغم وجود تعليمات صريحة بتفاديهما:
-    1. الضمائر المتصلة بآخر الفعل أو الاسم (ـكَ، ـهُ، ـهَا، ـكُمْ، ـنَا...)
-       يجب أن تحمل كل واحدة منها حركتها الخاصة دائماً، منفصلة عن حركة
-       الحرف الذي قبلها مباشرة. لو لقيت ضميراً متصلاً بلا أي حركة إطلاقاً
-       (مثل "لك" بدل "لَكَ"، أو "عنه" بدل "عنهُ")، أضف الحركة الناقصة على
-       الضمير نفسه.
-    2. أي كلمة قصيرة شائعة أو متشابهة رسماً بكلمة أخرى مختلفة النطق (زي
-       "زر" الذي قد يُقرأ خطأً كفعل أمر من "زار") ولم تُشكَّل بالكامل.
-    راجع أيضاً بقية الحركات نحوياً (حالة الفعل، حالة الاسم، صيغ الأمر
-    والمضارع) وصحّح أي خطأ نحوي واضح في حركة موجودة بالفعل.
+    قواعد لا يجوز خرقها:
+    1) اكتب عربية فصحى سليمة فقط؛ ممنوع العامية، التراكيب المترجمة حرفياً،
+       الكلمات الوهمية، أو الجمل التي لا معنى لها.
+    2) لا تخترع مصطلحاً أو وحدة قياس أو آلية فيزيائية. إذا كان افتراض الموضوع
+       خاطئاً، صححه بوضوح داخل السرد: اشرح الظاهرة الصحيحة أو قل إن الوصف
+       المتداول غير دقيق، ولا تحاول تبريره علمياً.
+    3) صحح التطابق والإعراب والضمائر وعلامات الترقيم، واجعل كل جملة قابلة
+       للفهم عند قراءتها منفردة. احذف الحشو والتكرار.
+    4) لا تضف أرقاماً أو أسماء أو نتائج إلا إذا كانت لازمة ومعلومة موثوقة؛
+       عند الشك استخدم صياغة تحفظية مثل "تُشير التقارير" أو احذف التفصيل.
+    5) حافظ على سؤال البداية وفكرة الموضوع ما لم تكن الفكرة نفسها خاطئة؛ عند
+       خطأ الفكرة، استبدلها بتصحيح علمي جذاب لا بمعلومة مختلقة. اختم بخاتمة
+       قصيرة سليمة، ولا تضف دعوة تفاعل جديدة إذا كانت موجودة بالفعل.
+    6) ضع التشكيل الكامل المناسب للنطق، لكن لا تجعل التشكيل يغطي خطأً لغوياً؛
+       صحة الكلمات والمعنى أولاً.
 
-    أجب حصراً بكائن JSON بمفتاح واحد فقط: {"corrected_text": "النص الكامل
-    بعد التصحيح، بنفس عدد الكلمات والترتيب والمعنى تماماً"}. أي تغيير في
-    عدد الكلمات أو معناها غير مقبول إطلاقاً — أنت مدقق تشكيل فقط، لست
-    كاتباً.
+    أجب حصراً بكائن JSON بمفتاح واحد:
+    {"corrected_text": "النص العربي الكامل بعد المراجعة"}
     """
 ).strip()
 
 
-def proofread_narration_tashkeel(script: str) -> str:
-    """Best-effort Stage-1 tashkeel proofreading (see the block comment
-    above) — sends `script` back through Groq as a dedicated proofreading
-    pass and returns the corrected text.
+CONTENT_RED_FLAGS = ("السيلينس", "الشهرات الجوية", "المحتلة بالدقيق", "البركان الثلجي")
 
-    Guards against the proofreading call doing more than proofreading: if
-    the call fails outright, returns malformed JSON, or the "corrected"
-    text's word count differs from the original (a sign it rewrote or
-    dropped content instead of only touching diacritics), this discards
-    the result and returns the ORIGINAL script unchanged. A missed
-    tashkeel fix is a much smaller risk than silently losing a sentence —
-    and Stage 2 (Whisper) is still there as a safety net either way.
-    """
+def find_content_red_flag(text: str) -> str | None:
+    plain = re.sub(r"[\u064B-\u065F\u0670]", "", text or "")
+    return next((flag for flag in CONTENT_RED_FLAGS if flag in plain), None)
+
+
+def proofread_narration_tashkeel(script: str) -> str:
+    """Mandatory editorial gate: grammar, meaning, factual plausibility, and tashkeel."""
     def _call() -> str:
         messages = [
             {"role": "system", "content": PROOFREAD_SYSTEM_PROMPT},
             {"role": "user", "content": json.dumps({"text": script}, ensure_ascii=False)},
         ]
-        raw_text = _groq_chat(messages, max_completion_tokens=GROQ_MAX_COMPLETION_TOKENS, temperature=0.2)
+        raw_text = _groq_chat(messages, max_completion_tokens=GROQ_MAX_COMPLETION_TOKENS, temperature=0.15)
         parsed = extract_json_block(raw_text)
         corrected = str(parsed.get("corrected_text", "")).strip()
         if not corrected:
-            raise PipelineError("Proofreading pass returned an empty corrected_text")
+            raise PipelineError("Editorial review returned an empty corrected_text")
         return corrected
 
-    try:
-        corrected = with_retries(_call, what="Groq tashkeel proofreading")
-    except PipelineError as exc:
-        log.warning(
-            "Tashkeel proofreading failed (%s); keeping the narration_script exactly as Groq "
-            "first generated it",
-            exc,
+    corrected = with_retries(_call, what="Arabic and factual editorial review")
+    orig_words = len(_normalize_for_compare(script).split())
+    new_words = len(_normalize_for_compare(corrected).split())
+    if new_words < max(70, int(orig_words * 0.70)) or new_words > int(orig_words * 1.35):
+        raise PipelineError(
+            f"Editorial review changed script length too much ({orig_words} -> {new_words} words)"
         )
-        return script
-
-    orig_word_count = len(_normalize_for_compare(script).split())
-    corrected_word_count = len(_normalize_for_compare(corrected).split())
-    if corrected_word_count != orig_word_count:
-        log.warning(
-            "Tashkeel proofreading changed the word count (%d -> %d words); discarding the "
-            "proofread version and keeping the original — this pass must only touch "
-            "diacritics, never content",
-            orig_word_count, corrected_word_count,
-        )
-        return script
-
-    log.info("Tashkeel proofreading pass applied (%d words, unchanged count)", corrected_word_count)
+    if len(re.findall(r"[\u0600-\u06FF]", corrected)) < max(40, int(new_words * 2.0)):
+        raise PipelineError("Editorial review returned insufficient Arabic text")
+    log.info("Arabic/scientific editorial gate passed (%d -> %d words)", orig_words, new_words)
     return corrected
-
-
 # --- Active length correction: top up a short narration_script instead of hoping ---
 # Root cause of the "narration_script only N words even after the engagement
 # outro; Groq output was too short" failures: Groq regularly undershoots the
@@ -2130,6 +2118,9 @@ def run_pipeline() -> None:
     # is written with the already-proofread script, so the saved record
     # always matches exactly what generate_tts receives.
     topic.narration_script = proofread_narration_tashkeel(topic.narration_script)
+    red_flag = find_content_red_flag(topic.narration_script)
+    if red_flag:
+        raise PipelineError(f"Rejected hallucinated or nonstandard content term: {red_flag}")
 
     (run_dir / "topic.json").write_text(
         json.dumps(topic.__dict__, ensure_ascii=False, indent=2), encoding="utf-8"
