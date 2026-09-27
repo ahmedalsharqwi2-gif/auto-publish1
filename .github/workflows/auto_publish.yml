@@ -1,12 +1,12 @@
-name: Auto publish videos (Cairo 08-15-19)
+name: Auto publish videos (Cairo 15-19)
 
 on:
   schedule:
-    # GitHub cron is UTC. UTC+03:00 local times:
-    # 08:00 = 05:00 UTC, 15:00 = 12:00 UTC, 19:00 = 16:00 UTC.
-    - cron: '0 5 * * *'
-    - cron: '0 12 * * *'
-    - cron: '0 16 * * *'
+    # GitHub cron is UTC. Cairo target times: start at 14:00 and 18:00
+    # local time (UTC+03:00), allowing one hour for generation before
+    # immediate publication at 15:00 and 19:00.
+    - cron: '0 11 * * *'
+    - cron: '0 15 * * *'
   workflow_dispatch:
 
 permissions:
