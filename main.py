@@ -763,15 +763,23 @@ CONTENT_RED_FLAGS = ("السيلينس", "الشهرات الجوية", "الم�
 
 def find_content_red_flag(text: str) -> str | None:
     plain = re.sub(r"[\u064B-\u065F\u0670]", "", text or "")
+    sentences = re.split(r"(?<=[.!؟])\s+", plain)
     for flag in CONTENT_RED_FLAGS:
-        for match in re.finditer(re.escape(flag), plain):
-            context_before = plain[max(0, match.start() - 70):match.start()]
-            context_after = plain[match.end():match.end() + 70]
-            negated = re.search(r"(?:لا|ليس|ليست|غير|غيرُ|غير موجود|غير معتمد|وصف.*غير دقيق|لا يسمى|لا تسمى|لا يطلق|لا تطلق)\s*$", context_before)
-            corrected = re.search(r"(?:غير دقيق|غير صحيحة|غير صحيح|لا وجود|لا توجد|ليست.*حقيقة)", context_after)
+        for sentence in sentences:
+            if flag not in sentence:
+                continue
+            negated = re.search(
+                r"(?:لا|ليس|ليست|غير|لا توجد|لا يوجد|لا يعتمد|لا تسمى|لا يسمى|لا يطلق|لا تطلق)"
+                r"[^.!؟]{0,100}" + re.escape(flag), sentence
+            )
+            corrected = re.search(
+                re.escape(flag) + r"[^.!؟]{0,100}(?:غير دقيق|غير صحيحة|غير صحيح|لا وجود|ليست.*حقيقة)",
+                sentence,
+            )
             if not (negated or corrected):
                 return flag
     return None
+
 
 
 def proofread_narration_tashkeel(script: str) -> str:
