@@ -8,6 +8,12 @@ on:
     - cron: '0 11 * * *'
     - cron: '0 15 * * *'
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Review the checked-in bad narration fixture only; never publish"
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -71,11 +77,20 @@ jobs:
           SILMA_FALLBACK_TO_EDGE: 'true'
           EDGE_TTS_RATE: '-8%'
           EDGE_TTS_PITCH: '-5Hz'
+          DRY_RUN: ${{ inputs.dry_run }}
+          DRY_RUN_INPUT_FILE: tests/fixtures/bad_narration.txt
         run: |
           echo "Python files in repository:"
           find . -maxdepth 2 -type f -name '*.py' -print
           test -f main.py || { echo "ERROR: main.py is missing from the repository"; exit 1; }
           python main.py
+
+      - name: Upload dry-run result
+        if: ${{ inputs.dry_run == true }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: auto-publish-editorial-dry-run
+          path: work/dry_run_result.json
 
       - name: Persist topic history
         # Persist even when footage/publishing fails: the generated topic has

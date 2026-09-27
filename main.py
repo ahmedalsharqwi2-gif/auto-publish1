@@ -74,6 +74,8 @@ log = logging.getLogger("pipeline")
 WORK_DIR = Path(os.getenv("WORK_DIR", "./work"))
 WORK_DIR.mkdir(parents=True, exist_ok=True)
 TOPIC_HISTORY_FILE = Path(os.getenv("TOPIC_HISTORY_FILE", "topic_history.json"))
+DRY_RUN = os.getenv("DRY_RUN", "false").lower() == "true"
+DRY_RUN_INPUT_FILE = Path(os.getenv("DRY_RUN_INPUT_FILE", "tests/fixtures/bad_narration.txt"))
 MIN_AUDIO_SECONDS = float(os.getenv("MIN_AUDIO_SECONDS", "85"))
 MAX_AUDIO_SECONDS = float(os.getenv("MAX_AUDIO_SECONDS", "89"))
 TARGET_AUDIO_SECONDS = float(os.getenv("TARGET_AUDIO_SECONDS", "87"))
@@ -2105,6 +2107,32 @@ def publish_video(video_path: Path, topic: Topic, channel_ids: list[str]) -> dic
 
 def run_pipeline() -> None:
     check_env()
+    if DRY_RUN:
+        if not DRY_RUN_INPUT_FILE.exists():
+            raise PipelineError(f"Dry-run input file is missing: {DRY_RUN_INPUT_FILE}")
+        raw_text = DRY_RUN_INPUT_FILE.read_text(encoding="utf-8").strip()
+        if not raw_text:
+            raise PipelineError("Dry-run input text is empty")
+        corrected = proofread_narration_tashkeel(raw_text)
+        red_flag = find_content_red_flag(corrected)
+        result = {
+            "dry_run": True,
+            "input_file": str(DRY_RUN_INPUT_FILE),
+            "input_word_count": len(_normalize_for_compare(raw_text).split()),
+            "corrected_word_count": len(_normalize_for_compare(corrected).split()),
+            "red_flag": red_flag,
+            "passed": red_flag is None,
+            "corrected_text": corrected,
+        }
+        out = WORK_DIR / "dry_run_result.json"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+        print("===== DRY RUN RESULT =====")
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        if red_flag:
+            raise PipelineError(f"Dry-run rejected corrected text because of: {red_flag}")
+        print("✅ Dry-run passed: no TTS, footage, or publishing was executed.")
+        return
     run_id = time.strftime("%Y%m%d_%H%M%S")
     run_dir = WORK_DIR / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
