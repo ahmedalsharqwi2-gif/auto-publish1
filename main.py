@@ -141,6 +141,8 @@ TTS_VOICE = os.getenv("TTS_VOICE", "ar-EG-SalmaNeural")
 SILMA_REFERENCE_WAV = Path(os.getenv("SILMA_REFERENCE_WAV", "assets/voice_reference_synthetic.wav"))
 SILMA_REFERENCE_TEXT = os.getenv("SILMA_REFERENCE_TEXT", "في عام 1943، بدأت خطة خداع عسكرية بوثيقة صغيرة، لكنها غيرت مسار معركة كاملة.").strip()
 SILMA_SPEED = float(os.getenv("SILMA_SPEED", "1.0"))
+SILMA_GUARD_ENABLED = os.getenv("SILMA_GUARD_ENABLED", "true").lower() == "true"
+SILMA_GUARD_MIN_MATCH_WORDS = int(os.getenv("SILMA_GUARD_MIN_MATCH_WORDS", "2"))
 
 GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
 GROQ_MAX_COMPLETION_TOKENS = int(os.getenv("GROQ_MAX_COMPLETION_TOKENS", "2200"))
@@ -1298,27 +1300,33 @@ def get_bg_music(dest_dir: Path) -> Path | None:
 # Step 3: Voiceover (edge-tts) + subtitles
 # ---------------------------------------------------------------------------
 
-def generate_tts(text: str, out_path: Path, voice: str = TTS_VOICE) -> Path:
-    """Generate narration with SILMA by default; Edge is opt-in."""
-    if TTS_ENGINE == "silma":
-        reference = SILMA_REFERENCE_WAV if SILMA_REFERENCE_WAV.is_absolute() else Path.cwd() / SILMA_REFERENCE_WAV
-        if not reference.exists():
-            raise PipelineError(f"SILMA reference is missing: {reference}")
-        from silma_tts.api import SilmaTTS
-        log.info("Generating SILMA narration from synthetic reference %s", reference)
-        wav_path = out_path.with_suffix(".silma.wav")
-        SilmaTTS().infer(ref_file=str(reference), ref_text=SILMA_REFERENCE_TEXT or None,
-                         gen_text=text, file_wave=str(wav_path), seed=None, speed=SILMA_SPEED)
-        result = subprocess.run(["ffmpeg", "-y", "-v", "error", "-i", str(wav_path),
-                                 "-c:a", "libmp3lame", "-b:a", "192k", str(out_path)],
-                                capture_output=True, text=True)
-        wav_path.unlink(missing_ok=True)
-        if result.returncode != 0 or not out_path.exists() or out_path.stat().st_size == 0:
-            raise PipelineError(f"SILMA produced no usable audio: {result.stderr[-1000:]}")
-        out_path.with_suffix(".timings.json").write_text("[]", encoding="utf-8")
-        return out_path
+def _norm_arabic_words(text: str) -> list[str]:
+    text = re.sub(r"[\u064B-\u065F\u0670]", "", text or "")
+    text = re.sub(r"[^\w\u0600-\u06FF]+", " ", text, flags=re.UNICODE)
+    return [w for w in text.lower().split() if w]
 
-    log.info("Generating Edge TTS narration with voice %s", voice)
+
+def detect_silma_reference_leak(audio_path: Path) -> str | None:
+    """Transcribe generated audio and detect a contiguous phrase copied from
+    SILMA's reference text. Returns the leaked phrase, or None."""
+    if not SILMA_GUARD_ENABLED or not SILMA_REFERENCE_TEXT:
+        return None
+    from faster_whisper import WhisperModel
+    model = WhisperModel(os.getenv("WHISPER_MODEL", "base"), device="cpu", compute_type="int8")
+    segments, _ = model.transcribe(str(audio_path), language="ar", word_timestamps=False, vad_filter=False)
+    heard = _norm_arabic_words(" ".join(seg.text or "" for seg in segments))
+    ref = _norm_arabic_words(SILMA_REFERENCE_TEXT)
+    minimum = max(2, min(SILMA_GUARD_MIN_MATCH_WORDS, len(ref)))
+    for size in range(len(ref), minimum - 1, -1):
+        phrase = ref[-size:]
+        for i in range(len(heard) - size + 1):
+            if heard[i:i + size] == phrase:
+                return " ".join(phrase)
+    return None
+
+
+def generate_edge_tts(text: str, out_path: Path, voice: str = TTS_VOICE) -> Path:
+    log.info("Generating Edge TTS fallback narration with voice %s", voice)
     import edge_tts
     async def _run():
         communicate = edge_tts.Communicate(text, voice)
@@ -1335,9 +1343,41 @@ def generate_tts(text: str, out_path: Path, voice: str = TTS_VOICE) -> Path:
     def _call() -> Path:
         asyncio.run(_run())
         if not out_path.exists() or out_path.stat().st_size == 0:
-            raise PipelineError("TTS produced an empty audio file")
+            raise PipelineError("Edge TTS fallback produced an empty audio file")
         return out_path
-    return with_retries(_call, what="TTS generation")
+    return with_retries(_call, what="Edge TTS fallback generation")
+
+
+def generate_tts(text: str, out_path: Path, voice: str = TTS_VOICE) -> Path:
+    """Generate SILMA, then guard its audio and automatically fall back to Edge."""
+    if TTS_ENGINE == "silma":
+        try:
+            reference = SILMA_REFERENCE_WAV if SILMA_REFERENCE_WAV.is_absolute() else Path.cwd() / SILMA_REFERENCE_WAV
+            if not reference.exists():
+                raise PipelineError(f"SILMA reference is missing: {reference}")
+            from silma_tts.api import SilmaTTS
+            log.info("Generating SILMA narration from synthetic reference %s", reference)
+            wav_path = out_path.with_suffix(".silma.wav")
+            SilmaTTS().infer(ref_file=str(reference), ref_text=SILMA_REFERENCE_TEXT or None,
+                             gen_text=text, file_wave=str(wav_path), seed=None, speed=SILMA_SPEED)
+            result = subprocess.run(["ffmpeg", "-y", "-v", "error", "-i", str(wav_path),
+                                     "-c:a", "libmp3lame", "-b:a", "192k", str(out_path)],
+                                    capture_output=True, text=True)
+            wav_path.unlink(missing_ok=True)
+            if result.returncode != 0 or not out_path.exists() or out_path.stat().st_size == 0:
+                raise PipelineError(f"SILMA produced no usable audio: {result.stderr[-1000:]}")
+            leak = detect_silma_reference_leak(out_path)
+            if leak:
+                log.warning("SILMA reference leak detected (%s); switching to Edge TTS", leak)
+                out_path.unlink(missing_ok=True)
+                return generate_edge_tts(text, out_path, voice)
+            out_path.with_suffix(".timings.json").write_text("[]", encoding="utf-8")
+            return out_path
+        except Exception as exc:  # noqa: BLE001
+            log.warning("SILMA failed or was rejected by audio guard (%s); switching to Edge TTS", exc)
+            out_path.unlink(missing_ok=True)
+            return generate_edge_tts(text, out_path, voice)
+    return generate_edge_tts(text, out_path, voice)
 
 def get_media_duration(path: Path) -> float:
     result = subprocess.run(

@@ -67,6 +67,8 @@ jobs:
           SILMA_REFERENCE_WAV: 'assets/voice_reference_synthetic.wav'
           SILMA_REFERENCE_TEXT: 'في عام 1943، بدأت خطة خداع عسكرية بوثيقة صغيرة، لكنها غيرت مسار معركة كاملة.'
           SILMA_SPEED: '1.0'
+          SILMA_GUARD_ENABLED: 'true'
+          SILMA_FALLBACK_TO_EDGE: 'true'
         run: |
           echo "Python files in repository:"
           find . -maxdepth 2 -type f -name '*.py' -print
