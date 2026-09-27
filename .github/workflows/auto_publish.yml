@@ -38,7 +38,14 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ffmpeg
           python -m pip install --upgrade pip
-          pip install requests edge-tts
+          pip install -r requirements.txt
+          edge-tts --voice ar-EG-ShakirNeural \
+            --text "في عام 1943، بدأت خطة خداع عسكرية بوثيقة صغيرة، لكنها غيرت مسار معركة كاملة." \
+            --write-media assets_voice_reference_synthetic.mp3
+          mkdir -p assets
+          ffmpeg -y -i assets_voice_reference_synthetic.mp3 \
+            -ac 1 -ar 24000 -sample_fmt s16 -t 8 \
+            assets/voice_reference_synthetic.wav
 
       - name: Generate and publish
         env:
@@ -56,6 +63,10 @@ jobs:
           MAX_SCRIPT_WORDS: '165'
           MIN_SCENE_CLIPS: '4'
           TOPIC_HISTORY_FILE: 'topic_history.json'
+          TTS_ENGINE: 'silma'
+          SILMA_REFERENCE_WAV: 'assets/voice_reference_synthetic.wav'
+          SILMA_REFERENCE_TEXT: 'في عام 1943، بدأت خطة خداع عسكرية بوثيقة صغيرة، لكنها غيرت مسار معركة كاملة.'
+          SILMA_SPEED: '1.0'
         run: |
           echo "Python files in repository:"
           find . -maxdepth 2 -type f -name '*.py' -print

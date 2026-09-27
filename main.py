@@ -136,7 +136,11 @@ GITHUB_REPOSITORY = os.getenv("GITHUB_REPOSITORY")
 # GPT-OSS 120B, comparably or more capable than Gemini Flash for this task.
 GROQ_API_KEY = _clean_env("GROQ_API_KEY")
 
+TTS_ENGINE = os.getenv("TTS_ENGINE", "silma").strip().lower()
 TTS_VOICE = os.getenv("TTS_VOICE", "ar-EG-SalmaNeural")
+SILMA_REFERENCE_WAV = Path(os.getenv("SILMA_REFERENCE_WAV", "assets/voice_reference_synthetic.wav"))
+SILMA_REFERENCE_TEXT = os.getenv("SILMA_REFERENCE_TEXT", "في عام 1943، بدأت خطة خداع عسكرية بوثيقة صغيرة، لكنها غيرت مسار معركة كاملة.").strip()
+SILMA_SPEED = float(os.getenv("SILMA_SPEED", "1.0"))
 
 GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
 GROQ_MAX_COMPLETION_TOKENS = int(os.getenv("GROQ_MAX_COMPLETION_TOKENS", "2200"))
@@ -1295,9 +1299,27 @@ def get_bg_music(dest_dir: Path) -> Path | None:
 # ---------------------------------------------------------------------------
 
 def generate_tts(text: str, out_path: Path, voice: str = TTS_VOICE) -> Path:
-    log.info("Generating TTS narration with voice %s", voice)
-    import edge_tts  # imported lazily so the script can still be linted without the dep
+    """Generate narration with SILMA by default; Edge is opt-in."""
+    if TTS_ENGINE == "silma":
+        reference = SILMA_REFERENCE_WAV if SILMA_REFERENCE_WAV.is_absolute() else Path.cwd() / SILMA_REFERENCE_WAV
+        if not reference.exists():
+            raise PipelineError(f"SILMA reference is missing: {reference}")
+        from silma_tts.api import SilmaTTS
+        log.info("Generating SILMA narration from synthetic reference %s", reference)
+        wav_path = out_path.with_suffix(".silma.wav")
+        SilmaTTS().infer(ref_file=str(reference), ref_text=SILMA_REFERENCE_TEXT or None,
+                         gen_text=text, file_wave=str(wav_path), seed=None, speed=SILMA_SPEED)
+        result = subprocess.run(["ffmpeg", "-y", "-v", "error", "-i", str(wav_path),
+                                 "-c:a", "libmp3lame", "-b:a", "192k", str(out_path)],
+                                capture_output=True, text=True)
+        wav_path.unlink(missing_ok=True)
+        if result.returncode != 0 or not out_path.exists() or out_path.stat().st_size == 0:
+            raise PipelineError(f"SILMA produced no usable audio: {result.stderr[-1000:]}")
+        out_path.with_suffix(".timings.json").write_text("[]", encoding="utf-8")
+        return out_path
 
+    log.info("Generating Edge TTS narration with voice %s", voice)
+    import edge_tts
     async def _run():
         communicate = edge_tts.Communicate(text, voice)
         timings = []
@@ -1306,23 +1328,16 @@ def generate_tts(text: str, out_path: Path, voice: str = TTS_VOICE) -> Path:
                 if chunk["type"] == "audio":
                     audio_file.write(chunk["data"])
                 elif chunk["type"] == "WordBoundary":
-                    timings.append({
-                        "text": chunk.get("text", ""),
-                        "offset": chunk.get("offset", 0) / 10_000_000,
-                        "duration": chunk.get("duration", 0) / 10_000_000,
-                    })
-        out_path.with_suffix(".timings.json").write_text(
-            json.dumps(timings, ensure_ascii=False), encoding="utf-8"
-        )
-
+                    timings.append({"text": chunk.get("text", ""),
+                                    "offset": chunk.get("offset", 0) / 10_000_000,
+                                    "duration": chunk.get("duration", 0) / 10_000_000})
+        out_path.with_suffix(".timings.json").write_text(json.dumps(timings, ensure_ascii=False), encoding="utf-8")
     def _call() -> Path:
         asyncio.run(_run())
         if not out_path.exists() or out_path.stat().st_size == 0:
             raise PipelineError("TTS produced an empty audio file")
         return out_path
-
     return with_retries(_call, what="TTS generation")
-
 
 def get_media_duration(path: Path) -> float:
     result = subprocess.run(
