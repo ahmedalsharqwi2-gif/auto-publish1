@@ -69,6 +69,8 @@ jobs:
           SILMA_SPEED: '1.0'
           SILMA_GUARD_ENABLED: 'true'
           SILMA_FALLBACK_TO_EDGE: 'true'
+          EDGE_TTS_RATE: '-8%'
+          EDGE_TTS_PITCH: '-5Hz'
         run: |
           echo "Python files in repository:"
           find . -maxdepth 2 -type f -name '*.py' -print

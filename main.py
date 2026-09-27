@@ -138,6 +138,8 @@ GROQ_API_KEY = _clean_env("GROQ_API_KEY")
 
 TTS_ENGINE = os.getenv("TTS_ENGINE", "silma").strip().lower()
 TTS_VOICE = os.getenv("TTS_VOICE", "ar-EG-SalmaNeural")
+EDGE_TTS_RATE = os.getenv("EDGE_TTS_RATE", "-8%")
+EDGE_TTS_PITCH = os.getenv("EDGE_TTS_PITCH", "-5Hz")
 SILMA_REFERENCE_WAV = Path(os.getenv("SILMA_REFERENCE_WAV", "assets/voice_reference_synthetic.wav"))
 SILMA_REFERENCE_TEXT = os.getenv("SILMA_REFERENCE_TEXT", "في عام 1943، بدأت خطة خداع عسكرية بوثيقة صغيرة، لكنها غيرت مسار معركة كاملة.").strip()
 SILMA_SPEED = float(os.getenv("SILMA_SPEED", "1.0"))
@@ -1329,7 +1331,7 @@ def generate_edge_tts(text: str, out_path: Path, voice: str = TTS_VOICE) -> Path
     log.info("Generating Edge TTS fallback narration with voice %s", voice)
     import edge_tts
     async def _run():
-        communicate = edge_tts.Communicate(text, voice)
+        communicate = edge_tts.Communicate(text, voice, rate=EDGE_TTS_RATE, pitch=EDGE_TTS_PITCH)
         timings = []
         with open(out_path, "wb") as audio_file:
             async for chunk in communicate.stream():
