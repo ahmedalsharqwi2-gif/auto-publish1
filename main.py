@@ -29,7 +29,7 @@ from typing import Any
 
 import requests
 from tts_quality import enforce_text_quality, generate_silma_guarded, load_reference, resolve_reference_profile
-from fact_check import fact_check_topic, preflight_topic_sources
+from fact_check import fact_check_topic
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -489,10 +489,6 @@ def llm_chat(messages: list[dict[str, str]], max_tokens: int = GROQ_MAX_COMPLETI
     if OPENROUTER_API_KEY:
         return _openrouter_chat(messages, max_tokens, temperature)
     raise PipelineError("No LLM provider available")
-
-
-# Keep old name as alias so test code and existing imports keep working
-_groq_chat_legacy = llm_chat
 
 
 PROOFREAD_SYSTEM_PROMPT = textwrap.dedent(
