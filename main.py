@@ -84,6 +84,8 @@ MAX_AUDIO_SECONDS = float(os.getenv("MAX_AUDIO_SECONDS", "89"))
 TARGET_AUDIO_SECONDS = float(os.getenv("TARGET_AUDIO_SECONDS", "87"))
 MIN_SCRIPT_WORDS = int(os.getenv("MIN_SCRIPT_WORDS", "120"))
 MAX_SCRIPT_WORDS = int(os.getenv("MAX_SCRIPT_WORDS", "165"))
+NARRATION_WORD_SAFETY_BUFFER = 12
+POST_PROOFREAD_TOP_UP_ATTEMPTS = 2
 # Topic generation is the one step whose failures are inherently about
 # content quality/length rather than a network hiccup, so it gets more
 # attempts than the generic MAX_RETRIES (3) used everywhere else — 3 was
@@ -893,7 +895,10 @@ def build_topic_user_prompt(seed: dict[str, Any], accessible_sources: list[dict[
     if not source_urls:
         raise PipelineError("Cannot write a topic without at least one preflighted source")
 
-    pre_outro_min = MIN_SCRIPT_WORDS - OUTRO_MIN_WORDS
+    pre_outro_min = min(
+        MAX_SCRIPT_WORDS - OUTRO_MAX_WORDS,
+        MIN_SCRIPT_WORDS - OUTRO_MIN_WORDS + NARRATION_WORD_SAFETY_BUFFER,
+    )
     pre_outro_max = MAX_SCRIPT_WORDS - OUTRO_MAX_WORDS
     bank_entry = {
         "bank_id": seed["id"],
@@ -984,6 +989,10 @@ def generate_topic() -> tuple[Topic, list[dict[str, str]], list[dict[str, str]]]
         # MIN_SCRIPT_WORDS..MAX_SCRIPT_WORDS.
         pre_outro_max = MAX_SCRIPT_WORDS - OUTRO_MAX_WORDS
         pre_outro_min = MIN_SCRIPT_WORDS - OUTRO_MIN_WORDS
+        target_pre_outro_min = min(
+            pre_outro_max,
+            pre_outro_min + NARRATION_WORD_SAFETY_BUFFER,
+        )
 
         if word_count > pre_outro_max:
             log.warning(
@@ -993,24 +1002,22 @@ def generate_topic() -> tuple[Topic, list[dict[str, str]], list[dict[str, str]]]
             )
             topic.narration_script = _trim_script_to_word_limit(topic.narration_script, pre_outro_max)
             word_count = len(topic.narration_script.split())
-        elif word_count < pre_outro_min + 5:
+        elif word_count < target_pre_outro_min:
             # This is the actual fix for the recurring "Groq output was too
             # short" failure: a script this far under target used to just
             # get a warning and the fixed CTA outro appended on top, which
             # adds only its fixed word count — nowhere near enough when
-            # Groq hands back ~100 words
-            # instead of the requested ~140. Actively expand it first
-            # instead of hoping. A few extra words of margin (+5) are
-            # requested on top of pre_outro_min so the final total isn't
-            # left sitting right on the edge of MIN_SCRIPT_WORDS.
+            # Groq hands back ~100 words instead of the requested ~140.
+            # Actively expand it first, with a safety buffer for later text
+            # review and foreign-token cleanup.
             log.warning(
                 "narration_script short (%d words, target >=%d before the outro); asking Groq to "
                 "expand it instead of relying on the outro alone",
-                word_count, pre_outro_min + 5,
+                word_count, target_pre_outro_min,
             )
             topic.narration_script = expand_narration_script(
                 topic.narration_script,
-                pre_outro_min + 5,
+                target_pre_outro_min,
                 verified_fact=topic.verified_fact,
                 source_urls=[source["url"] for source in prefetched_sources],
             )
@@ -1050,6 +1057,65 @@ def generate_topic() -> tuple[Topic, list[dict[str, str]], list[dict[str, str]]]
         topic.title, final_word_count, final_word_count / 1.75,
     )
     return topic, prefetched_sources, preflight_source_errors
+
+
+def _proofread_topic_narration(topic: Topic, script: str) -> str:
+    """Apply the same factual/Arabic review and TTS hygiene to a topic script."""
+    corrected = proofread_narration_tashkeel(
+        script,
+        canonical_subject=topic.title,
+        verified_fact=topic.verified_fact,
+    )
+    return enforce_text_quality(
+        corrected,
+        reviser=lambda text, issues: proofread_narration_tashkeel(
+            text,
+            issues=issues,
+            canonical_subject=topic.title,
+            verified_fact=topic.verified_fact,
+        ),
+    )
+
+
+def _top_up_underlength_narration(topic: Topic, accessible_source_urls: list[str]) -> str:
+    """Repair a short post-proofread draft before the fixed CTA is appended."""
+    minimum_before_outro = MIN_SCRIPT_WORDS - OUTRO_MIN_WORDS
+    maximum_before_outro = MAX_SCRIPT_WORDS - OUTRO_MAX_WORDS
+    target_words = min(
+        maximum_before_outro,
+        minimum_before_outro + NARRATION_WORD_SAFETY_BUFFER,
+    )
+
+    for attempt in range(1, POST_PROOFREAD_TOP_UP_ATTEMPTS + 1):
+        current_words = len(topic.narration_script.split())
+        if current_words >= minimum_before_outro:
+            return topic.narration_script
+        log.warning(
+            "Post-proofread narration is short (%d words; need %d before the fixed outro); "
+            "requesting a source-bound top-up (%d/%d)",
+            current_words,
+            minimum_before_outro,
+            attempt,
+            POST_PROOFREAD_TOP_UP_ATTEMPTS,
+        )
+        expanded = expand_narration_script(
+            topic.narration_script,
+            target_words,
+            verified_fact=topic.verified_fact,
+            source_urls=accessible_source_urls,
+        )
+        if len(expanded.split()) <= current_words:
+            log.warning("Post-proofread top-up did not add words; will not alter the script blindly")
+            continue
+        topic.narration_script = _proofread_topic_narration(topic, expanded)
+
+    final_words = len(topic.narration_script.split())
+    if final_words < minimum_before_outro:
+        raise PipelineError(
+            f"Narration remains {final_words} words before the fixed outro after "
+            f"{POST_PROOFREAD_TOP_UP_ATTEMPTS} bounded top-up attempts; minimum is {minimum_before_outro}"
+        )
+    return topic.narration_script
 
 
 # ---------------------------------------------------------------------------
@@ -2182,19 +2248,10 @@ def run_pipeline() -> None:
     # a caught diacritic mistake is never actually spoken. topic.json below
     # is written with the already-proofread script, so the saved record
     # always matches exactly what generate_tts receives.
-    topic.narration_script = proofread_narration_tashkeel(
-        topic.narration_script,
-        canonical_subject=topic.title,
-        verified_fact=topic.verified_fact,
-    )
-    topic.narration_script = enforce_text_quality(
-        topic.narration_script,
-        reviser=lambda text, issues: proofread_narration_tashkeel(
-            text,
-            issues=issues,
-            canonical_subject=topic.title,
-            verified_fact=topic.verified_fact,
-        ),
+    topic.narration_script = _proofread_topic_narration(topic, topic.narration_script)
+    topic.narration_script = _top_up_underlength_narration(
+        topic,
+        [source["url"] for source in prefetched_sources],
     )
     # Proofreading is intentionally complete before appending the fixed CTA,
     # so no language model can rewrite, shorten, or remove the user's exact words.
