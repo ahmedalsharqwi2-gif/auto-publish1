@@ -423,6 +423,9 @@ SYSTEM_PROMPT = textwrap.dedent(
 
     قواعد الأسلوب:
     - اكتب العربية الفصحى السليمة، وشكّل النص تشكيلًا كاملًا صحيحًا لتوجيه النطق.
+    - راجع كل جملة نحويًا: عيّن الفاعل والمفعول، واضبط عائد كل ضمير قبل إخراج النص.
+    - طابق الفعل مع الفاعل في التذكير والتأنيث والإفراد والتثنية والجمع، ولا تخلط بين
+      الغائب والمخاطب والمتكلم أو بين الماضي والمضارع.
     - ابدأ narration_script بنص hook_text نفسه، وأنهِ الشرح بعد اكتماله.
     - لا تضف طلب إعجاب أو مشاركة أو اشتراك (البرنامج يضيفها تلقائيًا).
     - اجعل scene_keywords_en مرتبطة فعليًا بمحتوى النص.
@@ -505,8 +508,10 @@ PROOFREAD_SYSTEM_PROMPT = textwrap.dedent(
     3) صحح الإعراب وعلامات الترقيم، واحذف الحشو.
     4) حافظ على سؤال البداية وموضوع النص. صحح الصياغة فقط.
     5) ضع التشكيل الكامل المناسب للنطق.
-    6) إذا وُجد مفتاح issues_to_fix فأصلح كل مشكلة مذكورة فيه.
-    7) اترك النص ينتهي بعد اكتمال الشرح، دون خاتمة تفاعلية.
+    6) ضع حركة الإعراب الأخيرة عند الحاجة، وشكّل الأفعال والضمائر والكلمات الملتبسة
+       تشكيلًا واضحًا؛ لا تترك كلمة عربية مهمة بلا تشكيل إذا كان لها أكثر من قراءة.
+    7) إذا وُجد مفتاح issues_to_fix فأصلح كل مشكلة مذكورة فيه.
+    8) اترك النص ينتهي بعد اكتمال الشرح، دون خاتمة تفاعلية.
 
     أجب حصراً بكائن JSON بمفتاح واحد:
     {"corrected_text": "النص العربي الكامل بعد المراجعة"}
@@ -713,8 +718,8 @@ def _proofread_topic_narration(topic: Topic, script: str) -> str:
             ),
         )
     except PipelineError as exc:
-        log.warning("Editorial review failed (%s); continuing with the original script", exc)
-        return keep_minimum_length(script)
+        log.error("Editorial review failed; the original script will be quality-checked strictly: %s", exc)
+        return keep_minimum_length(enforce_text_quality(script))
 
 
 # ---------------------------------------------------------------------------
@@ -1378,7 +1383,14 @@ def run_pipeline() -> None:
     if EDITORIAL_REVIEW_ENABLED:
         topic.narration_script = _proofread_topic_narration(topic, topic.narration_script)
     else:
-        log.info("Editorial LLM review disabled; using generated narration")
+        log.warning("Editorial LLM review disabled; applying strict local Arabic quality gate")
+    topic.narration_script = enforce_text_quality(
+        topic.narration_script,
+        reviser=lambda text, issues: proofread_narration_tashkeel(
+            text, issues=issues, canonical_subject=topic.title,
+            verified_fact=topic.verified_fact or None,
+        ),
+    )
     topic.narration_script = _append_engagement_outro(topic.narration_script)
     final_word_count = len(topic.narration_script.split())
     _validate_final_script_word_count(final_word_count)
