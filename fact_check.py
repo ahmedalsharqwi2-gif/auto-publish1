@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Source-backed scientific Fact Check gate for the publishing pipeline.
 
-The module is deliberately fail-closed: if a source cannot be fetched, a claim
-is unsupported/uncertain, or the reviewer confidence is below the threshold,
-it returns REJECT and the caller must not generate audio or publish.
+The module is deliberately fail-closed: if no source can be fetched, a claim is
+unsupported/uncertain, or reviewer confidence is below the threshold, it returns
+REJECT and the caller must not generate audio or publish. Individual unavailable
+sources are recorded and skipped only when other cited sources remain available.
+Titles, captions, and narration are all checked against the cited evidence.
 """
 from __future__ import annotations
 
@@ -157,7 +159,7 @@ def _groq_json(system: str, user: str) -> dict[str, Any]:
 def _extract_claims(script: str, verified_fact: str) -> list[dict[str, Any]]:
     result = _groq_json(
         """أنت مستخرج ادعاءات علمية فقط. لا تحكم على صحة النص ولا تضف معلومات من عندك.
-استخرج كل جملة قابلة للتحقق من النص العربي، خاصة الأرقام والعلاقات السببية والأسماء العلمية.
+استخرج كل جملة قابلة للتحقق من العنوان والكابشن والنص المنطوق، خاصة الأرقام والعلاقات السببية والأسماء العلمية، ولا تستثن الادعاءات المكتوبة بأسلوب تشويقي.
 أعد JSON فقط بالشكل: {\"claims\":[{\"claim\":\"...\",\"importance\":\"core|supporting\",\"numeric\":true|false}]}.
 لا تعتبر الدعوة إلى المتابعة أو الأسلوب البلاغي ادعاءً علميًا.""",
         json.dumps({"verified_fact": verified_fact, "script": script}, ensure_ascii=False),
@@ -212,17 +214,40 @@ def fact_check_topic(topic: Any, output_path: Path | None = None) -> dict[str, A
         "source_urls": list(_topic_value(topic, "source_urls", []) or []),
         "claims": [],
         "errors": [],
+        "source_fetch_errors": [],
+        "sources_fetched": [],
     }
     try:
         config = _load_config()
         script = str(_topic_value(topic, "narration_script", "")).strip()
+        title = str(_topic_value(topic, "title", "")).strip()
+        caption = str(_topic_value(topic, "caption", "")).strip()
         verified_fact = str(_topic_value(topic, "verified_fact", "")).strip()
         urls = [str(x) for x in (_topic_value(topic, "source_urls", []) or [])]
         if not script or not verified_fact or not urls:
             raise FactCheckError("Topic is missing narration_script, verified_fact, or source_urls")
+        review_content = "\n".join(
+            part for part in (
+                f"العنوان: {title}" if title else "",
+                f"الكابشن: {caption}" if caption else "",
+                f"النص المنطوق: {script}",
+            ) if part
+        )
         sources: list[dict[str, str]] = []
+        source_fetch_errors: list[dict[str, str]] = []
         for url in urls:
-            sources.append(fetch_source(url, config["allowed_domains"]))
+            try:
+                sources.append(fetch_source(url, config["allowed_domains"]))
+            except Exception as exc:
+                source_fetch_errors.append({"url": url, "error": str(exc)})
+                log.warning("Fact Check source unavailable; trying remaining sources: %s — %s", url, exc)
+        report["source_fetch_errors"] = source_fetch_errors
+        report["sources_fetched"] = [source["url"] for source in sources]
+        if not sources:
+            details = "; ".join(f"{item['url']}: {item['error']}" for item in source_fetch_errors)
+            raise FactCheckError(
+                f"No accessible Fact Check sources; refusing to verify without evidence. {details}"
+            )
         total = sum(len(x["text"]) for x in sources)
         if total > MAX_TOTAL_SOURCE_CHARS:
             remaining = MAX_TOTAL_SOURCE_CHARS
@@ -234,8 +259,8 @@ def fact_check_topic(topic: Any, output_path: Path | None = None) -> dict[str, A
                 if remaining <= 0:
                     break
             sources = trimmed
-        claims = _extract_claims(script, verified_fact)
-        judged = _judge_claims(script, verified_fact, claims, sources)
+        claims = _extract_claims(review_content, verified_fact)
+        judged = _judge_claims(review_content, verified_fact, claims, sources)
         judged_claims = judged.get("claims", [])
         if not isinstance(judged_claims, list) or len(judged_claims) < len(claims):
             raise FactCheckError("Fact Check model did not return a verdict for every extracted claim")

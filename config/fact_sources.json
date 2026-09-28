@@ -2,6 +2,7 @@
   "allowed_domains": [
     "nasa.gov",
     "noaa.gov",
+    "weather.gov",
     "usgs.gov",
     "esa.int",
     "cern",
