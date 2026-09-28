@@ -7,7 +7,7 @@ REJECT and the caller must not generate audio or publish. Individual unavailable
 sources are recorded and skipped only when other cited sources remain available.
 Titles, captions, and narration are all checked against the cited evidence.
 
-Provider: OpenRouter (openrouter/free router - auto-selects best free model)
+Provider: OpenRouter (multi-model fallback list of free models)
 """
 from __future__ import annotations
 
@@ -29,16 +29,26 @@ log = logging.getLogger("fact_check")
 DEFAULT_CONFIG = Path(os.getenv("FACT_CHECK_SOURCES_FILE", "config/fact_sources.json"))
 
 # ---------------------------------------------------------------------------
-# OpenRouter configuration (uses openrouter/free router)
+# OpenRouter configuration (multi-model fallback)
 # ---------------------------------------------------------------------------
 OPENROUTER_ENDPOINT = os.getenv(
     "OPENROUTER_ENDPOINT",
     "https://openrouter.ai/api/v1/chat/completions",
 )
-FACT_CHECK_MODEL = os.getenv(
+
+_FACT_CHECK_MODEL_LIST_RAW = os.getenv(
     "FACT_CHECK_MODEL",
-    os.getenv("OPENROUTER_MODEL", "openrouter/free"),
+    os.getenv(
+        "OPENROUTER_MODEL",
+        "qwen/qwen-2.5-7b-instruct:free,"
+        "mistralai/mistral-nemo:free,"
+        "meta-llama/llama-3.2-3b-instruct:free,"
+        "google/gemma-2-9b-it:free",
+    ),
 )
+FACT_CHECK_MODELS = [m.strip() for m in _FACT_CHECK_MODEL_LIST_RAW.split(",") if m.strip()]
+FACT_CHECK_MODEL = FACT_CHECK_MODELS[0]  # kept for logging/compat
+
 OPENROUTER_API_KEY = re.sub(
     r"\s+",
     "",
@@ -294,137 +304,101 @@ def _openrouter_json(
     schema: dict[str, Any],
     max_tokens: int = FACT_CHECK_MAX_COMPLETION_TOKENS,
 ) -> dict[str, Any]:
+    """OpenRouter JSON call with multi-model fallback (same pattern as main.py)."""
     if not OPENROUTER_API_KEY:
         raise FactCheckError("OPENROUTER_API_KEY is missing; cannot run Fact Check")
     _ = (schema_name, schema)
 
-    completion_tokens = max(256, int(max_tokens))
-    format_retries = 0
-    rate_limit_retries = 0
+    headers = {
+        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": OPENROUTER_REFERER,
+        "X-Title": OPENROUTER_TITLE,
+    }
 
-    def retry_with_more_tokens(reason: str) -> bool:
-        nonlocal completion_tokens, format_retries
-        next_budget = min(
-            max(completion_tokens * 2, 2048), MAX_OPENROUTER_COMPLETION_TOKENS
-        )
-        if format_retries >= OPENROUTER_JSON_FORMAT_MAX_RETRIES or next_budget <= completion_tokens:
-            return False
-        format_retries += 1
-        log.warning(
-            "OpenRouter %s for %s; retrying with %d completion tokens (%d/%d)",
-            reason, schema_name, next_budget,
-            format_retries, OPENROUTER_JSON_FORMAT_MAX_RETRIES,
-        )
-        completion_tokens = next_budget
-        return True
+    last_error: str = "no models attempted"
+    for model_idx, model_name in enumerate(FACT_CHECK_MODELS, start=1):
+        completion_tokens = max(512, int(max_tokens))
+        rate_limit_retries = 0
 
-    while True:
-        payload = {
-            "model": FACT_CHECK_MODEL,
-            "temperature": 0,
-            "max_tokens": completion_tokens,
-            "response_format": {"type": "json_object"},
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-        }
-        headers = {
-            "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-            "Content-Type": "application/json",
-            "HTTP-Referer": OPENROUTER_REFERER,
-            "X-Title": OPENROUTER_TITLE,
-        }
-        response = requests.post(
-            OPENROUTER_ENDPOINT,
-            headers=headers,
-            json=payload,
-            timeout=120,
-        )
-        if response.status_code == 429:
-            if rate_limit_retries >= OPENROUTER_RATE_LIMIT_MAX_RETRIES:
-                raise FactCheckError(
-                    f"OpenRouter Fact Check rate limit (429) persisted after "
-                    f"{rate_limit_retries} retries: {response.text[:500]}"
+        while True:
+            payload = {
+                "model": model_name,
+                "temperature": 0,
+                "max_tokens": completion_tokens,
+                "response_format": {"type": "json_object"},
+                "messages": [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+            }
+            try:
+                response = requests.post(
+                    OPENROUTER_ENDPOINT, headers=headers, json=payload, timeout=120,
                 )
-            rate_limit_retries += 1
-            delay = _rate_limit_delay(response, rate_limit_retries)
-            log.warning(
-                "OpenRouter Fact Check rate limit (429); waiting %.1fs before retry (%d/%d)",
-                delay, rate_limit_retries, OPENROUTER_RATE_LIMIT_MAX_RETRIES,
-            )
-            time.sleep(delay)
-            continue
-        if response.status_code == 400:
-            error_text = str(getattr(response, "text", ""))
-            if (
-                "response_format" in error_text
-                or "json_object" in error_text
-                or "json_validate_failed" in error_text
-            ):
-                if retry_with_more_tokens("strict JSON generation failed"):
-                    continue
+            except Exception as exc:
+                last_error = f"{model_name}: request failed: {exc}"
+                log.warning("Fact Check model %d/%d (%s) request failed: %s",
+                            model_idx, len(FACT_CHECK_MODELS), model_name, exc)
+                break
+
+            if response.status_code == 404:
+                last_error = f"{model_name}: 404 unavailable"
+                log.warning("Fact Check model %s unavailable; trying next", model_name)
+                break
+
+            if response.status_code == 429:
+                if rate_limit_retries >= OPENROUTER_RATE_LIMIT_MAX_RETRIES:
+                    last_error = f"{model_name}: persistent 429"
+                    log.warning("Fact Check model %s persistently rate-limited; next", model_name)
+                    break
+                rate_limit_retries += 1
+                delay = _rate_limit_delay(response, rate_limit_retries)
                 log.warning(
-                    "OpenRouter rejected response_format=json_object; retrying once "
-                    "without it and relying on regex extraction",
+                    "Fact Check model %s rate-limited; waiting %.1fs (%d/%d)",
+                    model_name, delay, rate_limit_retries, OPENROUTER_RATE_LIMIT_MAX_RETRIES,
                 )
-                try:
-                    fallback = requests.post(
-                        OPENROUTER_ENDPOINT,
-                        headers=headers,
-                        json={**payload, "response_format": None},
-                        timeout=120,
-                    )
-                except Exception as exc:
-                    raise FactCheckError(
-                        f"OpenRouter Fact Check fallback request failed: {exc}"
-                    ) from exc
-                if fallback.status_code != 200:
-                    raise FactCheckError(
-                        f"OpenRouter Fact Check request failed ({fallback.status_code}): "
-                        f"{fallback.text[:500]}"
-                    )
-                try:
-                    content = fallback.json()["choices"][0]["message"]["content"]
-                except (KeyError, IndexError, TypeError, json.JSONDecodeError) as exc:
-                    raise FactCheckError(
-                        "OpenRouter Fact Check fallback response has an unexpected shape"
-                    ) from exc
-                if not isinstance(content, str) or not content.strip():
-                    raise FactCheckError(
-                        "OpenRouter Fact Check returned an empty fallback response"
-                    )
-                return _json_from_model(content)
-        if response.status_code != 200:
-            raise FactCheckError(
-                f"OpenRouter Fact Check request failed ({response.status_code}): "
-                f"{response.text[:500]}"
-            )
-        try:
-            choice = response.json()["choices"][0]
-            content = choice["message"]["content"]
-            finish_reason = choice.get("finish_reason")
-        except (KeyError, IndexError, TypeError, json.JSONDecodeError) as exc:
-            raise FactCheckError(
-                "OpenRouter Fact Check response has an unexpected shape"
-            ) from exc
-        if (
-            not isinstance(content, str)
-            or not content.strip()
-            or finish_reason == "length"
-        ):
-            if retry_with_more_tokens("returned an empty/truncated JSON response"):
+                time.sleep(delay)
                 continue
-            raise FactCheckError(
-                "OpenRouter Fact Check returned an empty or truncated JSON response"
+
+            if response.status_code != 200:
+                last_error = f"{model_name}: HTTP {response.status_code} {response.text[:200]}"
+                log.warning("Fact Check model %s HTTP %d; next",
+                            model_name, response.status_code)
+                break
+
+            try:
+                choice = response.json()["choices"][0]
+                content = choice["message"]["content"]
+                finish_reason = choice.get("finish_reason")
+            except (KeyError, IndexError, TypeError, json.JSONDecodeError) as exc:
+                last_error = f"{model_name}: malformed response: {exc}"
+                log.warning("Fact Check model %s malformed response; next", model_name)
+                break
+
+            if not isinstance(content, str) or not content.strip():
+                last_error = f"{model_name}: empty content (finish_reason={finish_reason})"
+                log.warning(
+                    "Fact Check model %s returned empty content (finish_reason=%s); next",
+                    model_name, finish_reason,
+                )
+                break
+
+            log.info(
+                "Fact Check: using model %d/%d (%s)",
+                model_idx, len(FACT_CHECK_MODELS), model_name,
             )
-        return _json_from_model(content)
+            return _json_from_model(content)
+
+    raise FactCheckError(
+        f"All {len(FACT_CHECK_MODELS)} Fact Check models failed. Last error: {last_error}"
+    )
 
 
 def _extract_claims(script: str, verified_fact: str) -> list[dict[str, Any]]:
     result = _openrouter_json(
         """أنت مستخرج ادعاءات علمية فقط. لا تحكم على صحة النص ولا تضف معلومات من عندك.
-استخرج كل جملة قابلة للتحقق من العنوان والكابشن والنص المنطوق، خاصة الأرقام والعلاقات السببية والأسماء العلمية، ولا تستثن الادعاءات المكتوبة بأسلوب تشويقي.
+استخرج كل جملة قابلة للتحقق من العنوان والكابشن والنص المنطوق، خاصة الأرقام والعلاقات السببية والأسماء العلمية، ولا تستن الادعاءات المكتوبة بأسلوب تشويقي.
 أعد كائن JSON فقط، بدون أي نص قبله أو بعده، بالمفاتيح التالية بالضبط:
 {"claims":[{"claim":"ادعاء قابل للتحقق","importance":"core","numeric":false}]}
 importance يجب أن تكون "core" أو "supporting"، وnumeric قيمة منطقية true أو false.
