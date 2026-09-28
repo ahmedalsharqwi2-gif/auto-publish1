@@ -6,7 +6,7 @@ Generates a short-form vertical video (Arabic voiceover + burned-in subtitles +
 Pexels stock footage) from an AI-generated viral topic, then publishes it to
 YouTube / TikTok / Facebook via the Buffer API (buffer.com).
 
-Provider: OpenRouter (multi-model fallback list of free models)
+Provider: OpenRouter (multi-model fallback list of currently-available free models)
 """
 
 from __future__ import annotations
@@ -80,7 +80,8 @@ GH_RELEASE_TOKEN = _clean_env("GH_RELEASE_TOKEN") or _clean_env("GITHUB_TOKEN")
 GITHUB_REPOSITORY = os.getenv("GITHUB_REPOSITORY")
 
 # ---------------------------------------------------------------------------
-# OpenRouter configuration (multi-model fallback for maximum stability)
+# OpenRouter configuration (multi-model fallback list of CURRENTLY-AVAILABLE
+# free models on OpenRouter, verified September 2026)
 # ---------------------------------------------------------------------------
 OPENROUTER_API_KEY = _clean_env("OPENROUTER_API_KEY")
 OPENROUTER_ENDPOINT = "https://openrouter.ai/api/v1/chat/completions"
@@ -95,13 +96,20 @@ OPENROUTER_RATE_LIMIT_MAX_RETRIES = int(os.getenv("OPENROUTER_RATE_LIMIT_MAX_RET
 # reasoning-only response, rate limit, etc.), the pipeline automatically
 # moves on to the next. The single model can still be pinned by setting
 # OPENROUTER_MODEL env var explicitly to a single model id.
+#
+# NOTE: OpenRouter rotates its free model catalog frequently. If ALL models
+# below return 404, check https://openrouter.ai/collections/free-models for
+# the current list and update this string.
 _OPENROUTER_MODEL_LIST_RAW = os.getenv(
     "OPENROUTER_MODEL",
-    "qwen/qwen-2.5-7b-instruct:free,"
-    "mistralai/mistral-nemo:free,"
-    "meta-llama/llama-3.2-3b-instruct:free,"
-    "google/gemma-2-9b-it:free,"
-    "microsoft/phi-3-mini-128k-instruct:free",
+    # Current free models on OpenRouter (verified September 2026)
+    "google/gemma-4-26b-a4b-it:free,"
+    "google/gemma-4-31b-it:free,"
+    "inclusionai/ling-3.0-flash-sante:free,"
+    "inclusionai/ling-3.0-flash-fin:free,"
+    "nvidia/nemotron-3-super-120b-a12b:free,"
+    "z-ai/glm-5.2:free,"
+    "cohere/north-mini-code:free",
 )
 OPENROUTER_MODELS = [m.strip() for m in _OPENROUTER_MODEL_LIST_RAW.split(",") if m.strip()]
 OPENROUTER_MODEL = OPENROUTER_MODELS[0]  # kept for logging/compat
@@ -635,7 +643,9 @@ def _groq_chat(
             return raw_text
 
     raise PipelineError(
-        f"All {len(OPENROUTER_MODELS)} OpenRouter models failed. Last error: {last_error}"
+        f"All {len(OPENROUTER_MODELS)} OpenRouter models failed. Last error: {last_error}. "
+        "Please check https://openrouter.ai/collections/free-models for the current free model list "
+        "and update OPENROUTER_MODEL in your workflow."
     )
 
 
