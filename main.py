@@ -6,18 +6,7 @@ Generates a short-form vertical video (Arabic voiceover + burned-in subtitles +
 Pexels stock footage) from an AI-generated viral topic, then publishes it to
 YouTube / TikTok / Facebook via the Buffer API (buffer.com).
 
-Provider: OpenRouter (Llama 3.3 70B Instruct, free tier)
-           # >>> MODIFIED: switched from Groq to OpenRouter
-
-Required environment variables (set as GitHub Secrets in CI):
-    OPENROUTER_API_KEY            free key from openrouter.ai/keys
-    PEXELS_API_KEY
-    BUFFER_API_KEY
-    BUFFER_CHANNEL_IDS
-    GH_RELEASE_TOKEN
-
-Optional:
-    OPENROUTER_MODEL      model id (default: meta-llama/llama-3.3-70b-instruct:free)
+Provider: OpenRouter (openrouter/free router - auto-selects best free model)
 """
 
 from __future__ import annotations
@@ -91,12 +80,12 @@ GH_RELEASE_TOKEN = _clean_env("GH_RELEASE_TOKEN") or _clean_env("GITHUB_TOKEN")
 GITHUB_REPOSITORY = os.getenv("GITHUB_REPOSITORY")
 
 # ---------------------------------------------------------------------------
-# >>> MODIFIED: OpenRouter (Llama 3.3 70B) replaces the old Groq setup
+# OpenRouter configuration (uses openrouter/free router for stability)
 # ---------------------------------------------------------------------------
 OPENROUTER_API_KEY = _clean_env("OPENROUTER_API_KEY")
 OPENROUTER_MODEL = os.getenv(
     "OPENROUTER_MODEL",
-    "meta-llama/llama-3.3-70b-instruct:free",
+    "openrouter/free",
 )
 OPENROUTER_ENDPOINT = "https://openrouter.ai/api/v1/chat/completions"
 OPENROUTER_REFERER = os.getenv(
@@ -216,7 +205,7 @@ def with_retries(fn, *args, what: str = "operation", max_retries: int | None = N
             return fn(*args, **kwargs)
         except SourcePreflightError:
             raise
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             last_err = exc
             log.warning("Attempt %d/%d for %s failed: %s", attempt, attempts, what, exc)
             if attempt < attempts:
@@ -520,18 +509,13 @@ SYSTEM_PROMPT = textwrap.dedent(
 ).strip()
 
 
-# ---------------------------------------------------------------------------
-# >>> MODIFIED: OpenRouter chat (was Groq). Same retry/JSON contract.
-# ---------------------------------------------------------------------------
 def _groq_chat(
     messages: list[dict[str, str]],
     max_completion_tokens: int = GROQ_MAX_COMPLETION_TOKENS,
     temperature: float = 0.75,
 ) -> str:
     """Shared OpenRouter chat-completion call, forcing a JSON-object response.
-
-    Name kept as `_groq_chat` on purpose so the rest of the pipeline (which
-    calls this in several places) doesn't need to be renamed.
+    Uses openrouter/free router which auto-selects the best available free model.
     """
     payload: dict[str, Any] = {
         "model": OPENROUTER_MODEL,
@@ -590,7 +574,6 @@ def _groq_chat(
     )
 
 
-# --- Stage 1: mandatory Arabic + factual editorial review before TTS ---
 PROOFREAD_SYSTEM_PROMPT = textwrap.dedent(
     """
     أنت محرر عربي فصيح ومدقق علمي صارم، ولست مدقق تشكيل فقط. سيصلك نص قصير
@@ -1022,7 +1005,7 @@ def generate_ambient_music(dest: Path, duration: float = 90.0) -> Path | None:
         if dest.exists() and dest.stat().st_size > 0:
             log.info("Background music: generated offline ambient pad at %s", dest)
             return dest
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         log.warning("Could not generate offline ambient music: %s", exc)
     return None
 
@@ -1060,7 +1043,7 @@ def get_bg_music(dest_dir: Path) -> Path | None:
             download_file(url, dest)
             log.info("Background music: %s", url)
             return dest
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             log.warning("Could not fetch background music — trying offline fallback: %s", exc)
 
     generated = generate_ambient_music(dest_dir / "ambient_pad.mp3")
@@ -1147,7 +1130,7 @@ def generate_tts(
             )
             out_path.with_suffix(".timings.json").write_text("[]", encoding="utf-8")
             return out_path
-        except Exception:  # noqa: BLE001
+        except Exception:
             log.exception("SILMA failed or every candidate was rejected; switching to Edge TTS")
             out_path.unlink(missing_ok=True)
             return generate_edge_tts(text, out_path, voice)
@@ -1305,7 +1288,7 @@ def align_words_with_whisper(
                 "approx_seconds": round(timings[i]["offset"], 2),
                 "reason": "low_confidence", "confidence": round(prob, 2),
             })
-    return timings, flagged_words  # type: ignore[return-value]
+    return timings, flagged_words
 
 
 def realign_subtitles_with_whisper(narration_path: Path, script_text: str) -> tuple[bool, list[dict[str, Any]]]:
@@ -1324,7 +1307,7 @@ def realign_subtitles_with_whisper(narration_path: Path, script_text: str) -> tu
                 ),
             )
         return True, flagged_words
-    except Exception:  # noqa: BLE001
+    except Exception:
         log.error(
             "WHISPER ALIGNMENT FAILED — falling back to edge-tts's own word timings, which "
             "are known to run ahead of the actual audio. Captions in this video will likely "
@@ -1886,7 +1869,7 @@ def main() -> int:
     except PipelineError as exc:
         log.error("Pipeline failed: %s", exc)
         return 1
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         log.exception("Unexpected error: %s", exc)
         return 1
     return 0
