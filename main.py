@@ -6,26 +6,18 @@ Generates a short-form vertical video (Arabic voiceover + burned-in subtitles +
 Pexels stock footage) from an AI-generated viral topic, then publishes it to
 YouTube / TikTok / Facebook via the Buffer API (buffer.com).
 
-Provider: OpenRouter (Qwen 2.5 72B Instruct, free tier)
+Provider: OpenRouter (Llama 3.3 70B Instruct, free tier)
            # >>> MODIFIED: switched from Groq to OpenRouter
 
 Required environment variables (set as GitHub Secrets in CI):
     OPENROUTER_API_KEY            free key from openrouter.ai/keys
-                                  # >>> MODIFIED: was GROQ_API_KEY
     PEXELS_API_KEY
     BUFFER_API_KEY
     BUFFER_CHANNEL_IDS
     GH_RELEASE_TOKEN
 
 Optional:
-    OPENROUTER_MODEL      model id (default: qwen/qwen-2.5-72b-instruct:free)
-                          # >>> MODIFIED: was GROQ_MODEL
-
-Optional environment variables:
-    TTS_VOICE            edge-tts voice (default: ar-EG-SalmaNeural)
-    WORK_DIR             scratch directory (default: ./work)
-    LOG_LEVEL            default: INFO
-    BG_MUSIC_URL         direct MP3/audio URL(s), comma-separated
+    OPENROUTER_MODEL      model id (default: meta-llama/llama-3.3-70b-instruct:free)
 """
 
 from __future__ import annotations
@@ -68,15 +60,10 @@ TOPIC_BANK_FILE = Path(os.getenv("TOPIC_BANK_FILE", "config/topic_bank.json"))
 DRY_RUN = os.getenv("DRY_RUN", "false").lower() == "true"
 DRY_RUN_INPUT_FILE = Path(os.getenv("DRY_RUN_INPUT_FILE", "tests/fixtures/bad_narration.txt"))
 
-# >>> MODIFIED: strict duration window (60..90 seconds)
 MIN_AUDIO_SECONDS = float(os.getenv("MIN_AUDIO_SECONDS", "60"))
 MAX_AUDIO_SECONDS = float(os.getenv("MAX_AUDIO_SECONDS", "90"))
 TARGET_AUDIO_SECONDS = float(os.getenv("TARGET_AUDIO_SECONDS", str(max(1.0, MAX_AUDIO_SECONDS - 5.0))))
 MAX_SCRIPT_WORDS = int(os.getenv("MAX_SCRIPT_WORDS", "165"))
-# >>> MODIFIED: new hard minimum so short drafts are rejected and retried
-# (60s × ~1.85 words/sec = 111 words; using 120 for safety margin,
-# but the fixed CTA is 12 words and is appended later — so pre-CTA min
-# below is derived from this. See _validate_final_script_word_count.)
 MIN_SCRIPT_WORDS = int(os.getenv("MIN_SCRIPT_WORDS", "120"))
 
 REQUIRE_EXTERNAL_SOURCES = os.getenv("REQUIRE_EXTERNAL_SOURCES", "false").lower() == "true"
@@ -104,25 +91,21 @@ GH_RELEASE_TOKEN = _clean_env("GH_RELEASE_TOKEN") or _clean_env("GITHUB_TOKEN")
 GITHUB_REPOSITORY = os.getenv("GITHUB_REPOSITORY")
 
 # ---------------------------------------------------------------------------
-# >>> MODIFIED: OpenRouter (Qwen 2.5 72B) replaces the old Groq setup
+# >>> MODIFIED: OpenRouter (Llama 3.3 70B) replaces the old Groq setup
 # ---------------------------------------------------------------------------
 OPENROUTER_API_KEY = _clean_env("OPENROUTER_API_KEY")
 OPENROUTER_MODEL = os.getenv(
     "OPENROUTER_MODEL",
-    "qwen/qwen-2.5-72b-instruct:free",
+    "meta-llama/llama-3.3-70b-instruct:free",
 )
 OPENROUTER_ENDPOINT = "https://openrouter.ai/api/v1/chat/completions"
-# Optional but recommended by OpenRouter for analytics/ranking
 OPENROUTER_REFERER = os.getenv(
     "OPENROUTER_REFERER",
     f"https://github.com/{GITHUB_REPOSITORY}" if GITHUB_REPOSITORY else "https://github.com/",
 )
 OPENROUTER_TITLE = os.getenv("OPENROUTER_TITLE", "Auto Publish Reels")
-# OpenRouter caps free-model throughput; retry on 429 with a fallback delay.
 OPENROUTER_RATE_LIMIT_MAX_RETRIES = int(os.getenv("OPENROUTER_RATE_LIMIT_MAX_RETRIES", "4"))
 
-# Backward-compat alias so any code path that still references GROQ_MODEL
-# (e.g. logging strings) keeps working without a rename sweep.
 GROQ_MODEL = OPENROUTER_MODEL
 GROQ_MAX_COMPLETION_TOKENS = int(os.getenv("GROQ_MAX_COMPLETION_TOKENS", "2200"))
 
@@ -158,7 +141,6 @@ DEFAULT_BG_MUSIC_URL = (
     "https://raw.githubusercontent.com/effacestudios/Royalty-Free-Music-Pack/master/Bubbles.mp3"
 )
 
-# >>> MODIFIED: required env now uses OPENROUTER_API_KEY instead of GROQ_API_KEY
 REQUIRED_ENV = {
     "OPENROUTER_API_KEY": OPENROUTER_API_KEY,
     "PEXELS_API_KEY": PEXELS_API_KEY,
@@ -554,7 +536,6 @@ def _groq_chat(
     payload: dict[str, Any] = {
         "model": OPENROUTER_MODEL,
         "messages": messages,
-        # Qwen 2.5 72B Instruct supports OpenAI-style JSON mode via OpenRouter.
         "response_format": {"type": "json_object"},
         "max_tokens": max_completion_tokens,
         "temperature": temperature,
@@ -562,7 +543,6 @@ def _groq_chat(
     headers = {
         "Authorization": f"Bearer {OPENROUTER_API_KEY}",
         "Content-Type": "application/json",
-        # OpenRouter's recommended (optional) attribution headers:
         "HTTP-Referer": OPENROUTER_REFERER,
         "X-Title": OPENROUTER_TITLE,
     }
@@ -575,8 +555,6 @@ def _groq_chat(
             timeout=120,
         )
         if resp.status_code == 429:
-            # OpenRouter puts the wait hint in Retry-After (seconds) or in
-            # the body text; fall back to a sane default if neither exists.
             retry_after = resp.headers.get("Retry-After")
             wait_seconds = 15.0
             if retry_after:
@@ -726,9 +704,6 @@ def proofread_narration_tashkeel(
     return corrected
 
 
-# >>> MODIFIED: now enforces BOTH the min and max word count so short drafts
-# are rejected and the whole topic generation retries (with_retries already
-# wraps generate_topic's inner _call, so a raise here triggers another try).
 def _validate_final_script_word_count(word_count: int) -> None:
     if word_count < MIN_SCRIPT_WORDS:
         raise PipelineError(
@@ -834,8 +809,6 @@ def generate_topic() -> tuple[Topic, list[dict[str, str]], list[dict[str, str]]]
             topic.narration_script = _trim_script_to_word_limit(topic.narration_script, pre_outro_max)
             word_count = len(topic.narration_script.split())
 
-        # >>> MODIFIED: _validate_final_script_word_count now also raises on
-        # too-short drafts, which triggers a retry of the whole topic pick.
         final_word_count = word_count + OUTRO_MIN_WORDS
         _validate_final_script_word_count(final_word_count)
 
