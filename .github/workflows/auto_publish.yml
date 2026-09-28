@@ -46,6 +46,14 @@ jobs:
         with:
           path: ~/.cache/huggingface
           key: hf-models-v1
+      - name: Ensure SILMA reference voice
+        run: |
+          if [ ! -s assets/voice_reference_synthetic.wav ] || [ ! -s assets/voice_reference_synthetic.txt ]; then
+            echo "Reference voice is missing; generating it automatically."
+            python make_reference_voice.py
+          else
+            echo "Reference voice already exists."
+          fi
       - name: Generate and publish
         env:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
