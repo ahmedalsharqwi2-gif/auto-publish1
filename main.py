@@ -59,6 +59,7 @@ from typing import Any
 
 import requests
 from tts_quality import enforce_text_quality, generate_silma_guarded, load_reference, resolve_reference_profile
+from fact_check import fact_check_topic
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -2243,6 +2244,17 @@ def run_pipeline() -> None:
     red_flag = find_content_red_flag(topic.narration_script)
     if red_flag:
         raise PipelineError(f"Rejected hallucinated or nonstandard content term: {red_flag}")
+
+    # Hard publication gate: no TTS, video assembly, release upload, or
+    # Buffer request may happen until every extracted scientific claim is
+    # supported by an allow-listed source at the configured confidence.
+    fact_report = fact_check_topic(topic, run_dir / "fact_check.json")
+    if fact_report.get("status") != "PASS":
+        raise PipelineError(
+            "Fact Check rejected the final script; audio and publishing are blocked. "
+            f"Details: {fact_report.get('errors', [])}"
+        )
+    log.info("Fact Check passed: %d supported claim(s)", len(fact_report.get("claims", [])))
 
     (run_dir / "topic.json").write_text(
         json.dumps(topic.__dict__, ensure_ascii=False, indent=2), encoding="utf-8"

@@ -1,0 +1,21 @@
+{
+  "allowed_domains": [
+    "nasa.gov",
+    "noaa.gov",
+    "usgs.gov",
+    "esa.int",
+    "cern",
+    "nist.gov",
+    "nih.gov",
+    "cdc.gov",
+    "si.edu",
+    "gps.gov",
+    "nhtsa.gov",
+    "fhwa.dot.gov",
+    "britishmuseum.org",
+    "mit.edu"
+  ],
+  "minimum_confidence": 0.85,
+  "max_contradicted_claims": 0,
+  "max_uncertain_claims": 0
+}
