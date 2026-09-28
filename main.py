@@ -58,6 +58,7 @@ from pathlib import Path
 from typing import Any
 
 import requests
+from tts_quality import enforce_text_quality, generate_silma_guarded, load_reference
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -143,7 +144,10 @@ TTS_VOICE = os.getenv("TTS_VOICE", "ar-EG-SalmaNeural")
 EDGE_TTS_RATE = os.getenv("EDGE_TTS_RATE", "-8%")
 EDGE_TTS_PITCH = os.getenv("EDGE_TTS_PITCH", "-5Hz")
 SILMA_REFERENCE_WAV = Path(os.getenv("SILMA_REFERENCE_WAV", "assets/voice_reference_synthetic.wav"))
-SILMA_REFERENCE_TEXT = os.getenv("SILMA_REFERENCE_TEXT", "في عام 1943، بدأت خطة خداع عسكرية بوثيقة صغيرة، لكنها غيرت مسار معركة كاملة.").strip()
+SILMA_REFERENCE_TEXT = os.getenv("SILMA_REFERENCE_TEXT", "").strip()  # legacy fallback only
+SILMA_SEED = int(os.getenv("SILMA_SEED", "42"))
+SILMA_MAX_ATTEMPTS = int(os.getenv("SILMA_MAX_ATTEMPTS", "2"))
+SILMA_MIN_SCORE = float(os.getenv("SILMA_MIN_SCORE", "0.6"))
 SILMA_SPEED = float(os.getenv("SILMA_SPEED", "1.0"))
 SILMA_GUARD_ENABLED = os.getenv("SILMA_GUARD_ENABLED", "true").lower() == "true"
 SILMA_GUARD_MIN_MATCH_WORDS = int(os.getenv("SILMA_GUARD_MIN_MATCH_WORDS", "2"))
@@ -752,6 +756,8 @@ PROOFREAD_SYSTEM_PROMPT = textwrap.dedent(
        قصيرة سليمة، ولا تضف دعوة تفاعل جديدة إذا كانت موجودة بالفعل.
     6) ضع التشكيل الكامل المناسب للنطق، لكن لا تجعل التشكيل يغطي خطأً لغوياً؛
        صحة الكلمات والمعنى أولاً.
+    7) إذا وُجد مفتاح issues_to_fix في الرسالة فأصلح كل مشكلة مذكورة فيه صراحةً:
+       احذف أي حرف غير عربي، وأكمل التشكيل الناقص على كل كلمة، واكتب الأرقام بالحروف.
 
     أجب حصراً بكائن JSON بمفتاح واحد:
     {"corrected_text": "النص العربي الكامل بعد المراجعة"}
@@ -782,12 +788,15 @@ def find_content_red_flag(text: str) -> str | None:
 
 
 
-def proofread_narration_tashkeel(script: str) -> str:
+def proofread_narration_tashkeel(script: str, issues: list[str] | None = None) -> str:
     """Mandatory editorial gate: grammar, meaning, factual plausibility, and tashkeel."""
     def _call() -> str:
+        payload: dict[str, Any] = {"text": script}
+        if issues:
+            payload["issues_to_fix"] = issues
         messages = [
             {"role": "system", "content": PROOFREAD_SYSTEM_PROMPT},
-            {"role": "user", "content": json.dumps({"text": script}, ensure_ascii=False)},
+            {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
         ]
         raw_text = _groq_chat(messages, max_completion_tokens=GROQ_MAX_COMPLETION_TOKENS, temperature=0.15)
         parsed = extract_json_block(raw_text)
@@ -1364,36 +1373,22 @@ def generate_edge_tts(text: str, out_path: Path, voice: str = TTS_VOICE) -> Path
 
 
 def generate_tts(text: str, out_path: Path, voice: str = TTS_VOICE) -> Path:
-    """Generate SILMA, then guard its audio and automatically fall back to Edge."""
+    """Generate SILMA, guard its audio, and fall back to Edge when needed."""
     if TTS_ENGINE == "silma":
         try:
-            reference = SILMA_REFERENCE_WAV if SILMA_REFERENCE_WAV.is_absolute() else Path.cwd() / SILMA_REFERENCE_WAV
-            if not reference.exists():
-                raise PipelineError(f"SILMA reference is missing: {reference}")
-            from silma_tts.api import SilmaTTS
-            log.info("Generating SILMA narration from synthetic reference %s", reference)
-            wav_path = out_path.with_suffix(".silma.wav")
-            SilmaTTS().infer(ref_file=str(reference), ref_text=SILMA_REFERENCE_TEXT or None,
-                             gen_text=text, file_wave=str(wav_path), seed=None, speed=SILMA_SPEED)
-            result = subprocess.run(["ffmpeg", "-y", "-v", "error", "-i", str(wav_path),
-                                     "-c:a", "libmp3lame", "-b:a", "192k", str(out_path)],
-                                    capture_output=True, text=True)
-            wav_path.unlink(missing_ok=True)
-            if result.returncode != 0 or not out_path.exists() or out_path.stat().st_size == 0:
-                raise PipelineError(f"SILMA produced no usable audio: {result.stderr[-1000:]}")
-            leak = detect_silma_reference_leak(out_path)
-            if leak:
-                log.warning("SILMA reference leak detected (%s); switching to Edge TTS", leak)
-                out_path.unlink(missing_ok=True)
-                return generate_edge_tts(text, out_path, voice)
+            reference, ref_text = load_reference(SILMA_REFERENCE_WAV, SILMA_REFERENCE_TEXT)
+            generate_silma_guarded(
+                text, out_path, reference, ref_text,
+                speed=SILMA_SPEED, base_seed=SILMA_SEED,
+                attempts=SILMA_MAX_ATTEMPTS, min_score=SILMA_MIN_SCORE,
+            )
             out_path.with_suffix(".timings.json").write_text("[]", encoding="utf-8")
             return out_path
-        except Exception as exc:  # noqa: BLE001
-            log.warning("SILMA failed or was rejected by audio guard (%s); switching to Edge TTS", exc)
+        except Exception:  # noqa: BLE001
+            log.exception("SILMA failed or every candidate was rejected; switching to Edge TTS")
             out_path.unlink(missing_ok=True)
             return generate_edge_tts(text, out_path, voice)
     return generate_edge_tts(text, out_path, voice)
-
 def get_media_duration(path: Path) -> float:
     result = subprocess.run(
         [
@@ -2169,6 +2164,10 @@ def run_pipeline() -> None:
     # is written with the already-proofread script, so the saved record
     # always matches exactly what generate_tts receives.
     topic.narration_script = proofread_narration_tashkeel(topic.narration_script)
+    topic.narration_script = enforce_text_quality(
+        topic.narration_script,
+        reviser=lambda text, issues: proofread_narration_tashkeel(text, issues=issues),
+    )
     red_flag = find_content_red_flag(topic.narration_script)
     if red_flag:
         raise PipelineError(f"Rejected hallucinated or nonstandard content term: {red_flag}")

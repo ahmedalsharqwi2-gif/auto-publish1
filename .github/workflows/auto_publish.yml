@@ -2,9 +2,6 @@ name: Auto publish videos (Cairo 15-19)
 
 on:
   schedule:
-    # GitHub cron is UTC. Cairo target times: start at 14:00 and 18:00
-    # local time (UTC+03:00), allowing one hour for generation before
-    # immediate publication at 15:00 and 19:00.
     - cron: '0 11 * * *'
     - cron: '0 15 * * *'
   workflow_dispatch:
@@ -18,13 +15,13 @@ on:
 permissions:
   contents: write
 
-# Opt in all JavaScript-based actions to the Node.js 24 runtime.
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
 
 jobs:
   publish:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - name: Show scheduled trigger time
         env:
@@ -34,29 +31,21 @@ jobs:
           echo "Scheduled cron expression: ${{ github.event.schedule }}"
           echo "GitHub UTC time: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
           echo "Cairo local time: $(date '+%Y-%m-%d %H:%M:%S %Z')"
-
-      - name: Checkout repository
-        uses: actions/checkout@v5
-
-      - name: Set up Python
-        uses: actions/setup-python@v6
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.11'
-
       - name: Install dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          edge-tts --voice ar-EG-ShakirNeural \
-            --text "في عام 1943، بدأت خطة خداع عسكرية بوثيقة صغيرة، لكنها غيرت مسار معركة كاملة." \
-            --write-media assets_voice_reference_synthetic.mp3
-          mkdir -p assets
-          ffmpeg -y -i assets_voice_reference_synthetic.mp3 \
-            -ac 1 -ar 24000 -sample_fmt s16 -t 8 \
-            assets/voice_reference_synthetic.wav
-
+      - name: Cache models
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-models-v1
       - name: Generate and publish
         env:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
@@ -75,8 +64,9 @@ jobs:
           TOPIC_HISTORY_FILE: 'topic_history.json'
           TTS_ENGINE: 'silma'
           SILMA_REFERENCE_WAV: 'assets/voice_reference_synthetic.wav'
-          SILMA_REFERENCE_TEXT: 'في عام 1943، بدأت خطة خداع عسكرية بوثيقة صغيرة، لكنها غيرت مسار معركة كاملة.'
           SILMA_SPEED: '1.0'
+          SILMA_MAX_ATTEMPTS: '2'
+          SILMA_MIN_SCORE: '0.6'
           SILMA_GUARD_ENABLED: 'true'
           SILMA_FALLBACK_TO_EDGE: 'true'
           EDGE_TTS_RATE: '-8%'
@@ -85,27 +75,21 @@ jobs:
           DRY_RUN: ${{ inputs.dry_run }}
           DRY_RUN_INPUT_FILE: tests/fixtures/bad_narration.txt
         run: |
-          echo "Python files in repository:"
-          find . -maxdepth 2 -type f -name '*.py' -print
-          test -f main.py || { echo "ERROR: main.py is missing from the repository"; exit 1; }
+          test -f main.py || { echo "ERROR: main.py is missing"; exit 1; }
+          test -f tts_quality.py || { echo "ERROR: tts_quality.py is missing"; exit 1; }
+          test -f assets/voice_reference_synthetic.wav || { echo "ERROR: reference WAV is missing; run Make SILMA reference voice first"; exit 1; }
+          test -f assets/voice_reference_synthetic.txt || { echo "ERROR: reference TXT is missing; run Make SILMA reference voice first"; exit 1; }
           python main.py
-
       - name: Upload dry-run result
         if: ${{ inputs.dry_run == true }}
         uses: actions/upload-artifact@v4
         with:
           name: auto-publish-editorial-dry-run
           path: work/dry_run_result.json
-
       - name: Persist topic history
-        # Persist even when footage/publishing fails: the generated topic has
-        # already been used and must not be offered again on the next run.
         if: always()
         run: |
-          if [ ! -f topic_history.json ]; then
-            echo "topic_history.json was not created; the pipeline failed before a topic was saved."
-            exit 0
-          fi
+          if [ ! -f topic_history.json ]; then exit 0; fi
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add topic_history.json
