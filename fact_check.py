@@ -7,8 +7,7 @@ REJECT and the caller must not generate audio or publish. Individual unavailable
 sources are recorded and skipped only when other cited sources remain available.
 Titles, captions, and narration are all checked against the cited evidence.
 
-Provider: OpenRouter (Qwen 2.5 72B Instruct, free tier)
-           # >>> MODIFIED: switched from Groq to OpenRouter
+Provider: OpenRouter (Llama 3.3 70B Instruct, free tier)
 """
 from __future__ import annotations
 
@@ -30,7 +29,7 @@ log = logging.getLogger("fact_check")
 DEFAULT_CONFIG = Path(os.getenv("FACT_CHECK_SOURCES_FILE", "config/fact_sources.json"))
 
 # ---------------------------------------------------------------------------
-# >>> MODIFIED: OpenRouter replaces Groq.
+# OpenRouter (was Groq)
 # ---------------------------------------------------------------------------
 OPENROUTER_ENDPOINT = os.getenv(
     "OPENROUTER_ENDPOINT",
@@ -38,7 +37,7 @@ OPENROUTER_ENDPOINT = os.getenv(
 )
 FACT_CHECK_MODEL = os.getenv(
     "FACT_CHECK_MODEL",
-    os.getenv("OPENROUTER_MODEL", "qwen/qwen-2.5-72b-instruct:free"),
+    os.getenv("OPENROUTER_MODEL", "meta-llama/llama-3.3-70b-instruct:free"),
 )
 OPENROUTER_API_KEY = re.sub(
     r"\s+",
@@ -54,14 +53,12 @@ OPENROUTER_TITLE = os.getenv("OPENROUTER_TITLE", "Auto Publish Reels")
 # OpenRouter does not offer Groq's strict json_schema mode for most free
 # models. We use the more widely supported json_object mode and rely on the
 # existing regex extractor (_json_from_model) plus explicit prompt schemas.
-# Keep this set empty so the legacy "strict schema only" guard never trips.
 STRICT_JSON_SCHEMA_MODELS: set[str] = set()
 
 MIN_CONFIDENCE = float(os.getenv("FACT_CHECK_MIN_CONFIDENCE", "0.85"))
 FETCH_TIMEOUT = float(os.getenv("FACT_CHECK_FETCH_TIMEOUT", "20"))
 MAX_SOURCE_CHARS = int(os.getenv("FACT_CHECK_MAX_SOURCE_CHARS", "6000"))
 MAX_TOTAL_SOURCE_CHARS = int(os.getenv("FACT_CHECK_MAX_TOTAL_SOURCE_CHARS", "8000"))
-# >>> MODIFIED: env name now reflects the provider. Old name still read as fallback.
 OPENROUTER_RATE_LIMIT_MAX_RETRIES = max(
     0,
     int(
@@ -292,9 +289,6 @@ def _rate_limit_delay(response: requests.Response, attempt: int) -> float:
     return min(max(delay, 0.0) + 1.0, 120.0)
 
 
-# >>> MODIFIED: renamed from _groq_json; uses OpenRouter endpoint,
-# json_object response_format, and standard max_tokens (Qwen does not
-# accept reasoning_effort / include_reasoning).
 def _openrouter_json(
     system: str,
     user: str,
@@ -305,10 +299,6 @@ def _openrouter_json(
 ) -> dict[str, Any]:
     if not OPENROUTER_API_KEY:
         raise FactCheckError("OPENROUTER_API_KEY is missing; cannot run Fact Check")
-    # schema_name and schema are kept as parameters for interface stability
-    # and future use, but not sent to the API — Qwen does not support the
-    # strict json_schema response format. The prompts below already embed an
-    # explicit example, and _json_from_model() extracts the object robustly.
     _ = (schema_name, schema)
 
     completion_tokens = max(256, int(max_tokens))
@@ -370,9 +360,6 @@ def _openrouter_json(
             continue
         if response.status_code == 400:
             error_text = str(getattr(response, "text", ""))
-            # Some OpenRouter models reject response_format entirely. Retry
-            # once without it, and let _json_from_model's regex extract the
-            # JSON from the freeform output.
             if (
                 "response_format" in error_text
                 or "json_object" in error_text
