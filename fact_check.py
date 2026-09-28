@@ -3,7 +3,7 @@
 Source-backed Fact Check using Wikipedia (Arabic).
 Fetches the Wikipedia article for the topic and verifies all claims against it.
 
-Provider: Groq (primary) → OpenRouter (fallback).
+Provider: Gemini (primary) -> OpenRouter (optional fallback).
 """
 from __future__ import annotations
 
@@ -12,7 +12,6 @@ import json
 import logging
 import os
 import re
-import time
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
@@ -20,15 +19,13 @@ from urllib.parse import quote, urlparse
 
 import requests
 
+from llm_gemini import GEMINI_API_KEY, gemini_chat
+
 log = logging.getLogger("fact_check")
 
 DEFAULT_CONFIG = Path(os.getenv("FACT_CHECK_SOURCES_FILE", "config/fact_sources.json"))
 
-# LLM provider (Groq primary, OpenRouter fallback)
-GROQ_API_KEY = re.sub(r"\s+", "", os.getenv("GROQ_API_KEY", ""))
-GROQ_ENDPOINT = "https://api.groq.com/openai/v1/chat/completions"
-GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
-
+# LLM provider (Gemini primary, OpenRouter optional fallback)
 OPENROUTER_API_KEY = re.sub(r"\s+", "", os.getenv("OPENROUTER_API_KEY", ""))
 OPENROUTER_ENDPOINT = "https://openrouter.ai/api/v1/chat/completions"
 OPENROUTER_REFERER = os.getenv("OPENROUTER_REFERER", "https://github.com/")
@@ -96,19 +93,24 @@ def _topic_value(topic: Any, key: str, default: Any = "") -> Any:
 
 
 def _json_from_model(text: str) -> dict[str, Any]:
-    text = text.strip()
+    """Parse the JSON object out of a model reply (tolerates think blocks / fences / extra text)."""
+    text = re.sub(r"<think>.*?</think>", "", text or "", flags=re.DOTALL).strip()
     text = re.sub(r"^```(?:json)?", "", text, flags=re.I).strip()
     text = re.sub(r"```$", "", text).strip()
-    match = re.search(r"\{.*\}", text, re.DOTALL)
-    if not match:
-        raise FactCheckError(f"No JSON in model response: {text[:300]}")
-    try:
-        data = json.loads(match.group(0))
-    except json.JSONDecodeError as exc:
-        raise FactCheckError(f"Invalid JSON: {exc}") from exc
-    if not isinstance(data, dict):
-        raise FactCheckError("Response is not an object")
-    return data
+    decoder = json.JSONDecoder()
+    found: dict[str, Any] | None = None
+    for m in re.finditer(r"\{", text):
+        try:
+            obj, _ = decoder.raw_decode(text[m.start():])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(obj, dict):
+            found = obj
+            if "claims" in obj:
+                return obj
+    if found is not None:
+        return found
+    raise FactCheckError(f"No JSON in model response: {text[:300]}")
 
 
 def fetch_wikipedia_source(query: str) -> dict[str, str] | None:
@@ -147,47 +149,29 @@ def fetch_wikipedia_source(query: str) -> dict[str, str] | None:
 
 
 def _llm_call(system: str, user: str, max_tokens: int = FACT_CHECK_MAX_COMPLETION_TOKENS) -> dict[str, Any]:
-    """Call the LLM (Groq first, OpenRouter fallback) and parse JSON."""
+    """Call the LLM (Gemini first, optional OpenRouter fallback) and parse JSON."""
     messages = [
         {"role": "system", "content": system},
         {"role": "user", "content": user},
     ]
+    errors: list[str] = []
 
-    # Try Groq first
-    if GROQ_API_KEY:
-        payload = {
-            "model": GROQ_MODEL, "messages": messages,
-            "response_format": {"type": "json_object"},
-            "max_tokens": max_tokens, "temperature": 0,
-        }
-        for attempt in range(1, 4):
-            try:
-                resp = requests.post(
-                    GROQ_ENDPOINT,
-                    headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
-                    json=payload, timeout=120,
-                )
-            except Exception as exc:
-                log.warning("Groq fact-check call failed: %s", exc)
-                break
-            if resp.status_code == 429:
-                time.sleep(15.0)
-                continue
-            if resp.status_code != 200:
-                log.warning("Groq fact-check HTTP %d: %s", resp.status_code, resp.text[:200])
-                break
-            content = (resp.json().get("choices", [{}])[0].get("message") or {}).get("content") or ""
-            if content.strip():
-                return _json_from_model(content)
-            break
+    # 1) Gemini
+    if GEMINI_API_KEY:
+        try:
+            content = gemini_chat(messages, max_tokens=max_tokens, temperature=0, timeout=120)
+            return _json_from_model(content)
+        except Exception as exc:
+            errors.append(f"gemini: {exc}")
+            log.warning("Gemini fact-check call failed: %s", exc)
 
-    # Fallback to OpenRouter
+    # 2) OpenRouter fallback (optional)
     if OPENROUTER_API_KEY:
         for model in FACT_CHECK_MODELS:
             payload = {
                 "model": model, "messages": messages,
-                "response_format": {"type": "json_object"},
-                "max_tokens": max_tokens, "temperature": 0,
+                "max_tokens": max(max_tokens, 6000), "temperature": 0,
+                "reasoning": {"effort": "low", "exclude": True},
             }
             try:
                 resp = requests.post(
@@ -200,15 +184,25 @@ def _llm_call(system: str, user: str, max_tokens: int = FACT_CHECK_MAX_COMPLETIO
                     },
                     json=payload, timeout=120,
                 )
-            except Exception:
+            except Exception as exc:
+                errors.append(f"{model}: {exc}")
+                log.warning("OpenRouter fact-check %s error: %s", model, exc)
                 continue
             if resp.status_code != 200:
+                errors.append(f"{model}: HTTP {resp.status_code}")
+                log.warning("OpenRouter fact-check %s HTTP %d: %s", model, resp.status_code, resp.text[:200])
                 continue
-            content = (resp.json().get("choices", [{}])[0].get("message") or {}).get("content") or ""
-            if content.strip():
+            content = ((resp.json().get("choices") or [{}])[0].get("message") or {}).get("content") or ""
+            if not content.strip():
+                errors.append(f"{model}: empty content")
+                continue
+            try:
                 return _json_from_model(content)
+            except FactCheckError as exc:
+                errors.append(f"{model}: {exc}")
+                continue
 
-    raise FactCheckError("All LLM providers failed for Fact Check")
+    raise FactCheckError("All LLM providers failed for Fact Check: " + "; ".join(errors)[:600])
 
 
 def _extract_claims(script: str) -> list[dict[str, Any]]:
