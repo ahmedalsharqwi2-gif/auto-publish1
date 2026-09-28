@@ -29,21 +29,26 @@ jobs:
           echo "Scheduled cron expression: ${{ github.event.schedule }}"
           echo "GitHub UTC time: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
           echo "Cairo local time: $(date '+%Y-%m-%d %H:%M:%S %Z')"
+
       - uses: actions/checkout@v5
+
       - uses: actions/setup-python@v6
         with:
           python-version: '3.11'
+
       - name: Install dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+
       - name: Cache models
         uses: actions/cache@v4
         with:
           path: ~/.cache/huggingface
           key: hf-models-v1
+
       - name: Validate rotating SILMA voice profiles
         env:
           SILMA_VOICE_PROFILES_FILE: 'assets/voices/voice_profiles.json'
@@ -60,31 +65,45 @@ jobs:
               wav, text = resolve_reference_profile(profile_id, Path(os.environ["SILMA_VOICE_PROFILES_FILE"]))
               print(f"Validated rotating profile {profile_id}: {wav} ({len(text.split())} words)")
           PY
+
       - name: Generate and publish
         env:
-          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          # >>> MODIFIED: OpenRouter replaces Groq
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          OPENROUTER_MODEL: 'qwen/qwen-2.5-72b-instruct:free'
+          OPENROUTER_TITLE: 'Auto Publish Reels'
+          # OPENROUTER_REFERER is optional; main.py falls back to the repo URL if unset
+
           PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
           BUFFER_API_KEY: ${{ secrets.BUFFER_API_KEY }}
           BUFFER_CHANNEL_IDS: ${{ secrets.BUFFER_CHANNEL_IDS }}
           GH_RELEASE_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
+
+          # >>> MODIFIED: strict 60-90s window with safety margin + hard min
           MIN_AUDIO_SECONDS: '60'
           MAX_AUDIO_SECONDS: '90'
+          TARGET_AUDIO_SECONDS: '85'          # was 89 — leaves a 5s safety margin
+          MIN_SCRIPT_WORDS: '120'             # NEW — enforces a ~60s floor
+          MAX_SCRIPT_WORDS: '165'
           REQUIRE_EXTERNAL_SOURCES: 'false'
           VOICE_ROTATION_ENABLED: 'true'
-          TARGET_AUDIO_SECONDS: '89'
-          MAX_SCRIPT_WORDS: '165'
           MIN_SCENE_CLIPS: '4'
+
           TOPIC_HISTORY_FILE: 'topic_history.json'
           TOPIC_BANK_FILE: 'config/topic_bank.json'
           FACT_CHECK_SOURCES_FILE: 'config/fact_sources.json'
-          FACT_CHECK_MODEL: 'openai/gpt-oss-120b'
+
+          # >>> MODIFIED: fact_check.py must also be pointed at OpenRouter
+          # (see notes below — this file still needs a small patch)
+          FACT_CHECK_MODEL: 'qwen/qwen-2.5-72b-instruct:free'
           FACT_CHECK_MIN_CONFIDENCE: '0.85'
           FACT_CHECK_MAX_SOURCE_CHARS: '6000'
           FACT_CHECK_MAX_TOTAL_SOURCE_CHARS: '8000'
           FACT_CHECK_MAX_COMPLETION_TOKENS: '2048'
-          FACT_CHECK_GROQ_MAX_RETRIES: '4'
+          FACT_CHECK_OPENROUTER_MAX_RETRIES: '4'   # >>> MODIFIED: was FACT_CHECK_GROQ_MAX_RETRIES
+
           TTS_ENGINE: 'silma'
           SILMA_REFERENCE_PROFILE: ${{ inputs.voice_profile || 'mohamed_elbed' }}
           SILMA_VOICE_PROFILES_FILE: 'assets/voices/voice_profiles.json'
@@ -97,6 +116,7 @@ jobs:
           EDGE_TTS_PITCH: '-5Hz'
           MUSIC_VOLUME: '0.07'
           DRY_RUN: 'false'
+
         run: |
           test -f main.py || { echo "ERROR: main.py is missing"; exit 1; }
           test -f tts_quality.py || { echo "ERROR: tts_quality.py is missing"; exit 1; }
@@ -105,6 +125,7 @@ jobs:
           test -f fact_check.py || { echo "ERROR: fact_check.py is missing"; exit 1; }
           test -f config/fact_sources.json || { echo "ERROR: Fact Check sources config is missing"; exit 1; }
           python main.py
+
       - name: Upload Fact Check report
         if: always()
         uses: actions/upload-artifact@v4
@@ -112,6 +133,7 @@ jobs:
           name: fact-check-report
           path: work/**/fact_check.json
           if-no-files-found: ignore
+
       - name: Persist topic history
         if: success()
         run: |
@@ -124,8 +146,6 @@ jobs:
             exit 0
           fi
           git commit -m 'chore: persist published topic history'
-          # A manual fix or another successful run may have advanced main while
-          # this job was rendering. Rebase before pushing instead of failing.
           git fetch origin main
           git rebase origin/main
           git push origin HEAD:main
