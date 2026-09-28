@@ -7,7 +7,7 @@ REJECT and the caller must not generate audio or publish. Individual unavailable
 sources are recorded and skipped only when other cited sources remain available.
 Titles, captions, and narration are all checked against the cited evidence.
 
-Provider: OpenRouter (multi-model fallback list of free models)
+Provider: OpenRouter (multi-model fallback list of currently-available free models)
 """
 from __future__ import annotations
 
@@ -40,10 +40,13 @@ _FACT_CHECK_MODEL_LIST_RAW = os.getenv(
     "FACT_CHECK_MODEL",
     os.getenv(
         "OPENROUTER_MODEL",
-        "qwen/qwen-2.5-7b-instruct:free,"
-        "mistralai/mistral-nemo:free,"
-        "meta-llama/llama-3.2-3b-instruct:free,"
-        "google/gemma-2-9b-it:free",
+        "google/gemma-4-26b-a4b-it:free,"
+        "google/gemma-4-31b-it:free,"
+        "inclusionai/ling-3.0-flash-sante:free,"
+        "inclusionai/ling-3.0-flash-fin:free,"
+        "nvidia/nemotron-3-super-120b-a12b:free,"
+        "z-ai/glm-5.2:free,"
+        "cohere/north-mini-code:free",
     ),
 )
 FACT_CHECK_MODELS = [m.strip() for m in _FACT_CHECK_MODEL_LIST_RAW.split(",") if m.strip()]
@@ -398,7 +401,7 @@ def _openrouter_json(
 def _extract_claims(script: str, verified_fact: str) -> list[dict[str, Any]]:
     result = _openrouter_json(
         """أنت مستخرج ادعاءات علمية فقط. لا تحكم على صحة النص ولا تضف معلومات من عندك.
-استخرج كل جملة قابلة للتحقق من العنوان والكابشن والنص المنطوق، خاصة الأرقام والعلاقات السببية والأسماء العلمية، ولا تستن الادعاءات المكتوبة بأسلوب تشويقي.
+استخرج كل جملة قابلة للتحقق من العنوان والكابشن والنص المنطوق، خاصة الأرقام والعلاقات السببية والأسماء العلمية، ولا تستثن الادعاءات المكتوبة بأسلوب تشويقي.
 أعد كائن JSON فقط، بدون أي نص قبله أو بعده، بالمفاتيح التالية بالضبط:
 {"claims":[{"claim":"ادعاء قابل للتحقق","importance":"core","numeric":false}]}
 importance يجب أن تكون "core" أو "supporting"، وnumeric قيمة منطقية true أو false.
