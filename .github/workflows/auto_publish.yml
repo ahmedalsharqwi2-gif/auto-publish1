@@ -102,11 +102,19 @@ jobs:
           test -f assets/voices/voice_profiles.json || { echo "ERROR: voice profiles config is missing"; exit 1; }
           python main.py
       - name: Persist topic history
-        if: always()
+        if: success()
         run: |
           if [ ! -f topic_history.json ]; then exit 0; fi
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add topic_history.json
-          git diff --cached --quiet || git commit -m 'chore: persist published topic history'
-          git push
+          if git diff --cached --quiet; then
+            echo "No topic-history changes to persist."
+            exit 0
+          fi
+          git commit -m 'chore: persist published topic history'
+          # A manual fix or another successful run may have advanced main while
+          # this job was rendering. Rebase before pushing instead of failing.
+          git fetch origin main
+          git rebase origin/main
+          git push origin HEAD:main
