@@ -6,7 +6,7 @@ Generates a short-form vertical video (Arabic voiceover + burned-in subtitles +
 Pexels stock footage) from an AI-generated viral topic, then publishes it to
 YouTube / TikTok / Facebook via the Buffer API (buffer.com).
 
-Provider: Groq (primary, reliable) → OpenRouter (fallback)
+Provider: Gemini (primary) -> OpenRouter (optional fallback)
 Fact Check: Wikipedia (ar.wikipedia.org)
 """
 
@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any
 
 import requests
+from llm_gemini import GEMINI_API_KEY, gemini_chat, gemini_key_kind
 from tts_quality import enforce_text_quality, generate_silma_guarded, load_reference, resolve_reference_profile
 from fact_check import fact_check_topic
 
@@ -75,12 +76,8 @@ GH_RELEASE_TOKEN = _clean_env("GH_RELEASE_TOKEN") or _clean_env("GITHUB_TOKEN")
 GITHUB_REPOSITORY = os.getenv("GITHUB_REPOSITORY")
 
 # ---------------------------------------------------------------------------
-# LLM provider selection: Groq (primary, reliable) → OpenRouter (fallback)
+# LLM provider selection: Gemini (primary) -> OpenRouter (optional fallback)
 # ---------------------------------------------------------------------------
-GROQ_API_KEY = _clean_env("GROQ_API_KEY")
-GROQ_ENDPOINT = "https://api.groq.com/openai/v1/chat/completions"
-GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
-
 OPENROUTER_API_KEY = _clean_env("OPENROUTER_API_KEY")
 OPENROUTER_ENDPOINT = "https://openrouter.ai/api/v1/chat/completions"
 OPENROUTER_REFERER = os.getenv(
@@ -97,7 +94,7 @@ _OPENROUTER_MODEL_LIST_RAW = os.getenv(
 OPENROUTER_MODELS = [m.strip() for m in _OPENROUTER_MODEL_LIST_RAW.split(",") if m.strip()]
 OPENROUTER_MODEL = OPENROUTER_MODELS[0] if OPENROUTER_MODELS else ""
 
-GROQ_MAX_COMPLETION_TOKENS = int(os.getenv("GROQ_MAX_COMPLETION_TOKENS", "4000"))
+LLM_MAX_COMPLETION_TOKENS = int(os.getenv("LLM_MAX_COMPLETION_TOKENS", "4000"))
 LLM_TIMEOUT = int(os.getenv("LLM_TIMEOUT", "120"))
 LLM_MAX_RETRIES = int(os.getenv("LLM_MAX_RETRIES", "3"))
 
@@ -177,8 +174,13 @@ class Topic:
 # ---------------------------------------------------------------------------
 
 def check_env() -> None:
-    if not GROQ_API_KEY and not OPENROUTER_API_KEY:
-        raise PipelineError("At least one of GROQ_API_KEY or OPENROUTER_API_KEY is required")
+    if not GEMINI_API_KEY and not OPENROUTER_API_KEY:
+        raise PipelineError("GEMINI_API_KEY is required (OPENROUTER_API_KEY alone is only a fallback)")
+    if GEMINI_API_KEY:
+        kind = gemini_key_kind()
+        log.info("Gemini API key detected: %s", kind)
+        if kind.startswith("unrecognized"):
+            log.warning("Gemini key format looks unusual; if calls fail with 401/403, re-create the secret")
     missing = [k for k, v in REQUIRED_ENV.items() if not v]
     if not BUFFER_CHANNEL_IDS:
         missing.append("BUFFER_CHANNEL_IDS")
@@ -353,13 +355,28 @@ def remember_topic(topic: Topic) -> None:
 
 
 def extract_json_block(text: str) -> dict[str, Any]:
-    text = text.strip()
+    """Extract the JSON object from a model reply.
+
+    Tolerates <think> blocks, markdown fences and reasoning text before/after
+    the JSON. Prefers an object that contains one of the expected keys.
+    """
+    text = re.sub(r"<think>.*?</think>", "", text or "", flags=re.DOTALL).strip()
     text = re.sub(r"^```(?:json)?", "", text).strip()
     text = re.sub(r"```$", "", text).strip()
-    match = re.search(r"\{.*\}", text, re.DOTALL)
-    if not match:
-        raise PipelineError(f"Could not find JSON object in model response: {text[:300]}")
-    return json.loads(match.group(0))
+    decoder = json.JSONDecoder()
+    found: dict[str, Any] | None = None
+    for m in re.finditer(r"\{", text):
+        try:
+            obj, _ = decoder.raw_decode(text[m.start():])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(obj, dict):
+            found = obj
+            if "corrected_text" in obj or "hook_text" in obj:
+                return obj
+    if found is not None:
+        return found
+    raise PipelineError(f"Could not find JSON object in model response: {text[:300]}")
 
 
 # ---------------------------------------------------------------------------
@@ -400,41 +417,8 @@ SYSTEM_PROMPT = textwrap.dedent(
 ).strip()
 
 
-def _groq_chat(messages: list[dict[str, str]], max_tokens: int, temperature: float) -> str:
-    """Direct Groq API call (reliable primary provider)."""
-    if not GROQ_API_KEY:
-        raise PipelineError("GROQ_API_KEY is not set")
-    headers = {
-        "Authorization": f"Bearer {GROQ_API_KEY}",
-        "Content-Type": "application/json",
-    }
-    payload: dict[str, Any] = {
-        "model": GROQ_MODEL,
-        "messages": messages,
-        "response_format": {"type": "json_object"},
-        "max_tokens": max_tokens,
-        "temperature": temperature,
-    }
-    for attempt in range(1, LLM_MAX_RETRIES + 1):
-        resp = requests.post(GROQ_ENDPOINT, headers=headers, json=payload, timeout=LLM_TIMEOUT)
-        if resp.status_code == 429:
-            match = re.search(r"try again in\s+([0-9.]+)s", resp.text, re.IGNORECASE)
-            wait = min(max(float(match.group(1)) if match else 15.0, 3.0), 60.0)
-            log.warning("Groq rate-limited; waiting %.1fs (%d/%d)", wait, attempt, LLM_MAX_RETRIES)
-            time.sleep(wait + 1.0)
-            continue
-        if resp.status_code != 200:
-            raise PipelineError(f"Groq API error {resp.status_code}: {resp.text[:500]}")
-        data = resp.json()
-        content = (data.get("choices", [{}])[0].get("message") or {}).get("content") or ""
-        if not content.strip():
-            raise PipelineError(f"Groq returned empty content: {data}")
-        return content
-    raise PipelineError(f"Groq rate-limited after {LLM_MAX_RETRIES} retries")
-
-
 def _openrouter_chat(messages: list[dict[str, str]], max_tokens: int, temperature: float) -> str:
-    """OpenRouter with multi-model fallback (secondary provider)."""
+    """OpenRouter with multi-model fallback (optional secondary provider)."""
     if not OPENROUTER_API_KEY:
         raise PipelineError("OPENROUTER_API_KEY is not set")
     headers = {
@@ -444,48 +428,53 @@ def _openrouter_chat(messages: list[dict[str, str]], max_tokens: int, temperatur
         "X-Title": OPENROUTER_TITLE,
     }
     last_error = "no models"
-    for model_idx, model in enumerate(OPENROUTER_MODELS, start=1):
+    for model in OPENROUTER_MODELS:
         payload: dict[str, Any] = {
             "model": model,
             "messages": messages,
-            "response_format": {"type": "json_object"},
-            "max_tokens": max_tokens,
+            "max_tokens": max(max_tokens, 8000),
             "temperature": temperature,
+            "reasoning": {"effort": "low", "exclude": True},
         }
-        try:
-            resp = requests.post(OPENROUTER_ENDPOINT, headers=headers, json=payload, timeout=LLM_TIMEOUT)
-        except Exception as exc:
-            last_error = f"{model}: {exc}"
-            continue
-        if resp.status_code == 404:
-            last_error = f"{model}: 404"
-            log.warning("OpenRouter model %d/%d (%s) unavailable", model_idx, len(OPENROUTER_MODELS), model)
-            continue
-        if resp.status_code == 429:
-            time.sleep(8.0)
-            last_error = f"{model}: 429"
-            continue
-        if resp.status_code != 200:
-            last_error = f"{model}: HTTP {resp.status_code}"
-            continue
-        data = resp.json()
-        content = (data.get("choices", [{}])[0].get("message") or {}).get("content") or ""
-        if not content.strip():
-            last_error = f"{model}: empty content"
-            continue
-        log.info("OpenRouter: using model %s", model)
-        return content
+        for attempt in (1, 2):
+            try:
+                resp = requests.post(OPENROUTER_ENDPOINT, headers=headers, json=payload, timeout=LLM_TIMEOUT)
+            except Exception as exc:
+                last_error = f"{model}: {exc}"
+                log.warning("OpenRouter %s attempt %d: %s", model, attempt, exc)
+                continue
+            if resp.status_code == 429:
+                last_error = f"{model}: 429"
+                log.warning("OpenRouter %s rate-limited", model)
+                time.sleep(8.0)
+                continue
+            if resp.status_code != 200:
+                last_error = f"{model}: HTTP {resp.status_code} {resp.text[:200]}"
+                log.warning("OpenRouter %s failed: %s", model, last_error)
+                break
+            data = resp.json()
+            content = ((data.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
+            if not content.strip():
+                last_error = f"{model}: empty content"
+                log.warning("OpenRouter %s returned empty content (attempt %d)", model, attempt)
+                continue
+            log.info("OpenRouter: using model %s", model)
+            return content
     raise PipelineError(f"All OpenRouter models failed: {last_error}")
 
 
-def llm_chat(messages: list[dict[str, str]], max_tokens: int = GROQ_MAX_COMPLETION_TOKENS,
+def llm_chat(messages: list[dict[str, str]], max_tokens: int = LLM_MAX_COMPLETION_TOKENS,
              temperature: float = 0.7) -> str:
-    """Dispatch to Groq first; if it fails, try OpenRouter."""
-    if GROQ_API_KEY:
+    """Dispatch to Gemini first; if it fails and OpenRouter is configured, try that."""
+    if GEMINI_API_KEY:
         try:
-            return _groq_chat(messages, max_tokens, temperature)
-        except PipelineError as exc:
-            log.warning("Groq failed (%s); trying OpenRouter fallback", exc)
+            return gemini_chat(messages, max_tokens=max_tokens, temperature=temperature,
+                               timeout=LLM_TIMEOUT)
+        except Exception as exc:
+            log.warning("Gemini failed (%s)", exc)
+            if not OPENROUTER_API_KEY:
+                raise PipelineError(f"Gemini failed and no fallback is configured: {exc}") from exc
+            log.warning("Trying OpenRouter fallback")
     if OPENROUTER_API_KEY:
         return _openrouter_chat(messages, max_tokens, temperature)
     raise PipelineError("No LLM provider available")
@@ -558,7 +547,7 @@ def proofread_narration_tashkeel(
             {"role": "system", "content": PROOFREAD_SYSTEM_PROMPT},
             {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
         ]
-        raw_text = llm_chat(messages, max_tokens=GROQ_MAX_COMPLETION_TOKENS, temperature=0.15)
+        raw_text = llm_chat(messages, max_tokens=LLM_MAX_COMPLETION_TOKENS, temperature=0.15)
         parsed = extract_json_block(raw_text)
         corrected = str(parsed.get("corrected_text", "")).strip()
         if not corrected:
@@ -612,7 +601,7 @@ def build_topic_user_prompt(recent_topics: list[str], recent_categories: list[st
 
 def generate_topic() -> tuple[Topic, list[dict[str, str]], list[dict[str, str]]]:
     log.info("Generating a fresh topic via LLM (provider: %s)...",
-             "groq" if GROQ_API_KEY else "openrouter")
+             "gemini" if GEMINI_API_KEY else "openrouter")
 
     def _parse_topic(raw_text: str) -> tuple[Topic, int]:
         parsed = extract_json_block(raw_text)
@@ -672,19 +661,28 @@ def generate_topic() -> tuple[Topic, list[dict[str, str]], list[dict[str, str]]]
 
 
 def _proofread_topic_narration(topic: Topic, script: str) -> str:
-    corrected = proofread_narration_tashkeel(
-        script,
-        canonical_subject=topic.title,
-        verified_fact=topic.verified_fact or None,
-    )
-    return enforce_text_quality(
-        corrected,
-        reviser=lambda text, issues: proofread_narration_tashkeel(
-            text, issues=issues,
+    """Editorial review. If the reviewer LLM fails, fall back to the original script.
+
+    This is safe because fact_check_topic() still runs afterwards and blocks
+    publishing of anything it cannot support from Wikipedia.
+    """
+    try:
+        corrected = proofread_narration_tashkeel(
+            script,
             canonical_subject=topic.title,
             verified_fact=topic.verified_fact or None,
-        ),
-    )
+        )
+        return enforce_text_quality(
+            corrected,
+            reviser=lambda text, issues: proofread_narration_tashkeel(
+                text, issues=issues,
+                canonical_subject=topic.title,
+                verified_fact=topic.verified_fact or None,
+            ),
+        )
+    except PipelineError as exc:
+        log.warning("Editorial review failed (%s); continuing with the original script", exc)
+        return script
 
 
 # ---------------------------------------------------------------------------
