@@ -1019,6 +1019,7 @@ def generate_topic() -> Topic:
                 "source_urls": seed["source_urls"],
             }, ensure_ascii=False)
             + "\nاذكر الحقيقة المدعومة بالمصدر فقط، وميّز أي حدود للمعرفة بوضوح."
+            + "\nيجب أن يستند كل من hook_text وtitle وcaption والنص المنطوق مباشرةً إلى verified_fact ومصدره. لا تضف مقارنة يومية أو رقماً أو تشبيهاً غير مدعوم صراحةً بالحقيقة؛ إذا كانت الزاوية لا تسند المقارنة، اختر صياغة أخرى مرتبطة بالحقيقة نفسها."
         )
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},

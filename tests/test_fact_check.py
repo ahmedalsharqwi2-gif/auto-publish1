@@ -79,6 +79,9 @@ class SpecificNOAASourceTests(unittest.TestCase):
                 self.assertEqual(len(matches), 10)
                 self.assertTrue(all(x.get("source_urls") == [url] for x in matches))
 
+        lightning_comparison = next(x for x in data["topics"] if x.get("id") == "earth_11_02")
+        self.assertEqual(lightning_comparison["angle"], "كيف يؤدي تسخين الهواء بالبرق إلى صوت الرعد؟")
+
         source_config = json.loads((ROOT / "config/fact_sources.json").read_text(encoding="utf-8"))
         self.assertIn("weather.gov", source_config["allowed_domains"])
 
