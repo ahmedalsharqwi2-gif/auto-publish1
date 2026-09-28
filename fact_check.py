@@ -7,7 +7,7 @@ REJECT and the caller must not generate audio or publish. Individual unavailable
 sources are recorded and skipped only when other cited sources remain available.
 Titles, captions, and narration are all checked against the cited evidence.
 
-Provider: OpenRouter (Llama 3.3 70B Instruct, free tier)
+Provider: OpenRouter (openrouter/free router - auto-selects best free model)
 """
 from __future__ import annotations
 
@@ -29,7 +29,7 @@ log = logging.getLogger("fact_check")
 DEFAULT_CONFIG = Path(os.getenv("FACT_CHECK_SOURCES_FILE", "config/fact_sources.json"))
 
 # ---------------------------------------------------------------------------
-# OpenRouter (was Groq)
+# OpenRouter configuration (uses openrouter/free router)
 # ---------------------------------------------------------------------------
 OPENROUTER_ENDPOINT = os.getenv(
     "OPENROUTER_ENDPOINT",
@@ -37,7 +37,7 @@ OPENROUTER_ENDPOINT = os.getenv(
 )
 FACT_CHECK_MODEL = os.getenv(
     "FACT_CHECK_MODEL",
-    os.getenv("OPENROUTER_MODEL", "meta-llama/llama-3.3-70b-instruct:free"),
+    os.getenv("OPENROUTER_MODEL", "openrouter/free"),
 )
 OPENROUTER_API_KEY = re.sub(
     r"\s+",
@@ -50,9 +50,6 @@ OPENROUTER_REFERER = os.getenv(
 )
 OPENROUTER_TITLE = os.getenv("OPENROUTER_TITLE", "Auto Publish Reels")
 
-# OpenRouter does not offer Groq's strict json_schema mode for most free
-# models. We use the more widely supported json_object mode and rely on the
-# existing regex extractor (_json_from_model) plus explicit prompt schemas.
 STRICT_JSON_SCHEMA_MODELS: set[str] = set()
 
 MIN_CONFIDENCE = float(os.getenv("FACT_CHECK_MIN_CONFIDENCE", "0.85"))
@@ -378,7 +375,7 @@ def _openrouter_json(
                         json={**payload, "response_format": None},
                         timeout=120,
                     )
-                except Exception as exc:  # noqa: BLE001
+                except Exception as exc:
                     raise FactCheckError(
                         f"OpenRouter Fact Check fallback request failed: {exc}"
                     ) from exc
