@@ -42,6 +42,7 @@ GROQ_RATE_LIMIT_MAX_RETRIES = max(0, int(os.getenv("FACT_CHECK_GROQ_MAX_RETRIES"
 GROQ_JSON_FORMAT_MAX_RETRIES = max(0, int(os.getenv("FACT_CHECK_JSON_FORMAT_MAX_RETRIES", "1")))
 MAX_GROQ_COMPLETION_TOKENS = 4096
 FACT_CHECK_MAX_COMPLETION_TOKENS = max(1024, int(os.getenv("FACT_CHECK_MAX_COMPLETION_TOKENS", "2048")))
+REQUIRE_EXTERNAL_SOURCES = os.getenv("REQUIRE_EXTERNAL_SOURCES", "false").lower() == "true"
 USER_AGENT = "auto-publish1-fact-check/1.0 (+https://github.com/ahmedalsharqwi2-gif/auto-publish1)"
 _SOURCE_CACHE: dict[tuple[str, tuple[str, ...]], dict[str, str]] = {}
 CLAIM_EXTRACTION_SCHEMA: dict[str, Any] = {
@@ -442,8 +443,8 @@ def fact_check_topic(
         caption = str(_topic_value(topic, "caption", "")).strip()
         verified_fact = str(_topic_value(topic, "verified_fact", "")).strip()
         urls = [str(x) for x in (_topic_value(topic, "source_urls", []) or [])]
-        if not script or not verified_fact or not urls:
-            raise FactCheckError("Topic is missing narration_script, verified_fact, or source_urls")
+        if not script or not verified_fact or (not urls and REQUIRE_EXTERNAL_SOURCES):
+            raise FactCheckError("Topic is missing narration_script or verified_fact")
         review_content = "\n".join(
             part for part in (
                 f"العنوان: {title}" if title else "",
@@ -472,6 +473,18 @@ def fact_check_topic(
                     log.warning("Fact Check source unavailable; trying remaining sources: %s — %s", url, exc)
         report["source_fetch_errors"] = source_fetch_errors
         report["sources_fetched"] = [source["url"] for source in sources]
+        if not sources and not REQUIRE_EXTERNAL_SOURCES:
+            # The topic bank is the canonical internal evidence. External URLs
+            # improve verification when reachable, but a blocked site must not
+            # make the publishing pipeline unusable.
+            sources = [{
+                "url": "topic-bank://verified_fact",
+                "text": verified_fact,
+            }]
+            log.warning(
+                "No external Fact Check source was reachable; checking against the vetted "
+                "topic-bank fact instead"
+            )
         if not sources:
             details = "; ".join(f"{item['url']}: {item['error']}" for item in source_fetch_errors)
             raise FactCheckError(
