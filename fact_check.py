@@ -208,7 +208,9 @@ def _groq_json(system: str, user: str, max_tokens: int = FACT_CHECK_MAX_COMPLETI
             {"role": "user", "content": user},
         ],
     }
-    for attempt in range(1, GROQ_RATE_LIMIT_MAX_RETRIES + 2):
+    rate_limit_retries = 0
+    json_mode_fallback_used = False
+    while True:
         response = requests.post(
             GROQ_ENDPOINT,
             headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
@@ -216,18 +218,42 @@ def _groq_json(system: str, user: str, max_tokens: int = FACT_CHECK_MAX_COMPLETI
             timeout=60,
         )
         if response.status_code == 429:
-            if attempt > GROQ_RATE_LIMIT_MAX_RETRIES:
+            if rate_limit_retries >= GROQ_RATE_LIMIT_MAX_RETRIES:
                 raise FactCheckError(
-                    f"Groq Fact Check rate limit (429) persisted after {attempt - 1} retries: "
+                    f"Groq Fact Check rate limit (429) persisted after {rate_limit_retries} retries: "
                     f"{response.text[:500]}"
                 )
-            delay = _groq_rate_limit_delay(response, attempt)
+            rate_limit_retries += 1
+            delay = _groq_rate_limit_delay(response, rate_limit_retries)
             log.warning(
                 "Groq Fact Check rate limit (429); waiting %.1fs before retry (%d/%d)",
-                delay, attempt, GROQ_RATE_LIMIT_MAX_RETRIES,
+                delay, rate_limit_retries, GROQ_RATE_LIMIT_MAX_RETRIES,
             )
             time.sleep(delay)
             continue
+        if response.status_code == 400 and not json_mode_fallback_used:
+            error_text = str(getattr(response, "text", ""))
+            try:
+                error_body = response.json()
+            except (ValueError, TypeError, json.JSONDecodeError):
+                error_body = {}
+            error = error_body.get("error", {}) if isinstance(error_body, dict) else {}
+            error_code = error.get("code") if isinstance(error, dict) else None
+            if error_code == "json_validate_failed" or "json_validate_failed" in error_text:
+                # Retry only this provider-side constrained-JSON failure in
+                # plain mode. _json_from_model still validates locally, and
+                # malformed output continues to fail closed before publishing.
+                payload.pop("response_format", None)
+                payload["messages"][0]["content"] += (
+                    "\n\nأخرج كائن JSON صالحًا فقط، بلا Markdown أو نص خارجه. "
+                    "سيتم تحليله والتحقق منه محليًا."
+                )
+                json_mode_fallback_used = True
+                log.warning(
+                    "Groq rejected constrained JSON output (json_validate_failed); "
+                    "retrying once with local JSON validation"
+                )
+                continue
         if response.status_code != 200:
             raise FactCheckError(f"Groq Fact Check request failed ({response.status_code}): {response.text[:500]}")
         break
@@ -242,7 +268,8 @@ def _extract_claims(script: str, verified_fact: str) -> list[dict[str, Any]]:
     result = _groq_json(
         """أنت مستخرج ادعاءات علمية فقط. لا تحكم على صحة النص ولا تضف معلومات من عندك.
 استخرج كل جملة قابلة للتحقق من العنوان والكابشن والنص المنطوق، خاصة الأرقام والعلاقات السببية والأسماء العلمية، ولا تستثن الادعاءات المكتوبة بأسلوب تشويقي.
-أعد JSON فقط بالشكل: {\"claims\":[{\"claim\":\"...\",\"importance\":\"core|supporting\",\"numeric\":true|false}]}.
+أعد JSON فقط بمثال صالح مثل: {\"claims\":[{\"claim\":\"ادعاء قابل للتحقق\",\"importance\":\"core\",\"numeric\":false}]}.
+importance يجب أن تكون core أو supporting، وnumeric قيمة منطقية true أو false.
         لا تعتبر الدعوة إلى المتابعة أو الأسلوب البلاغي ادعاءً علميًا.""",
         json.dumps({"verified_fact": verified_fact, "script": script}, ensure_ascii=False),
         max_tokens=700,
@@ -277,8 +304,9 @@ def _judge_claims(
 لا تستخدم معرفتك العامة لسد الفراغات. صنف كل ادعاء إلى supported أو contradicted أو uncertain أو unsupported.
 supported يتطلب دليلاً واضحًا في المصدر. contradicted يعني أن المصدر يناقضه. uncertain/unsupported مرفوضان.
 إذا كان الادعاء الرقمي مختلفًا في الرقم أو الوحدة أو التقريب عن المصدر فاعتبره contradicted أو uncertain.
-أعد JSON فقط بالشكل:
-{\"claims\":[{\"claim\":\"...\",\"verdict\":\"supported|contradicted|uncertain|unsupported\",\"confidence\":0.0,\"evidence_quote\":\"اقتباس قصير من المصدر أو فراغ\",\"source_url\":\"...\",\"reason\":\"...\"}],\"overall_reason\":\"...\"}""",
+أعد JSON فقط بمثال صالح مثل:
+{\"claims\":[{\"claim\":\"ادعاء\",\"verdict\":\"supported\",\"confidence\":0.9,\"evidence_quote\":\"اقتباس قصير\",\"source_url\":\"https://example.org/article\",\"reason\":\"الدليل يدعم الادعاء\"}],\"overall_reason\":\"ملخص\"}.
+قيمة verdict يجب أن تكون واحدة من: supported, contradicted, uncertain, unsupported.""",
         json.dumps({
             "verified_fact": verified_fact,
             "script": script,

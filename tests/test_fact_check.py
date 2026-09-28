@@ -162,6 +162,55 @@ class GroqRateLimitRetryTests(unittest.TestCase):
         self.assertAlmostEqual(sleep.call_args.args[0], 10.5925)
         self.assertEqual(post.call_args_list[0].kwargs["json"]["max_tokens"], 700)
 
+    def test_json_validation_400_retries_once_without_constrained_mode(self):
+        invalid_json_mode = SimpleNamespace(
+            status_code=400,
+            headers={},
+            text='{"error":{"code":"json_validate_failed"}}',
+            json=lambda: {"error": {"code": "json_validate_failed"}},
+        )
+        success = SimpleNamespace(
+            status_code=200,
+            headers={},
+            text="",
+            json=lambda: {"choices": [{"message": {"content": '{"claims": []}'}}]},
+        )
+        submitted_payloads = []
+        responses = iter([invalid_json_mode, success])
+
+        def capture_post(*args, **kwargs):
+            submitted_payloads.append(json.loads(json.dumps(kwargs["json"])))
+            return next(responses)
+
+        with (
+            patch("fact_check.GROQ_API_KEY", "test-key"),
+            patch("fact_check.requests.post", side_effect=capture_post) as post,
+        ):
+            result = _groq_json("extract claims", "script", max_tokens=700)
+
+        self.assertEqual(result, {"claims": []})
+        self.assertEqual(post.call_count, 2)
+        first_payload, fallback_payload = submitted_payloads
+        self.assertEqual(first_payload["response_format"], {"type": "json_object"})
+        self.assertNotIn("response_format", fallback_payload)
+        self.assertIn("كائن JSON صالحًا فقط", fallback_payload["messages"][0]["content"])
+
+    def test_other_400_errors_are_not_retried_as_json_mode_failures(self):
+        bad_request = SimpleNamespace(
+            status_code=400,
+            headers={},
+            text='{"error":{"code":"invalid_request_error"}}',
+            json=lambda: {"error": {"code": "invalid_request_error"}},
+        )
+        with (
+            patch("fact_check.GROQ_API_KEY", "test-key"),
+            patch("fact_check.requests.post", return_value=bad_request) as post,
+            self.assertRaisesRegex(FactCheckError, "request failed \\(400\\)"),
+        ):
+            _groq_json("system", "user")
+
+        self.assertEqual(post.call_count, 1)
+
     def test_persistent_429_is_bounded_and_fails_closed(self):
         limited = SimpleNamespace(status_code=429, headers={"Retry-After": "0"}, text="still limited")
         with (
