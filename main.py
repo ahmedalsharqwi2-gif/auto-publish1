@@ -6,7 +6,7 @@ Generates a short-form vertical video (Arabic voiceover + burned-in subtitles +
 Pexels stock footage) from an AI-generated viral topic, then publishes it to
 YouTube / TikTok / Facebook via the Buffer API (buffer.com).
 
-Provider: OpenRouter (openrouter/free router - auto-selects best free model)
+Provider: OpenRouter (multi-model fallback list of free models)
 """
 
 from __future__ import annotations
@@ -80,13 +80,9 @@ GH_RELEASE_TOKEN = _clean_env("GH_RELEASE_TOKEN") or _clean_env("GITHUB_TOKEN")
 GITHUB_REPOSITORY = os.getenv("GITHUB_REPOSITORY")
 
 # ---------------------------------------------------------------------------
-# OpenRouter configuration (uses openrouter/free router for stability)
+# OpenRouter configuration (multi-model fallback for maximum stability)
 # ---------------------------------------------------------------------------
 OPENROUTER_API_KEY = _clean_env("OPENROUTER_API_KEY")
-OPENROUTER_MODEL = os.getenv(
-    "OPENROUTER_MODEL",
-    "openrouter/free",
-)
 OPENROUTER_ENDPOINT = "https://openrouter.ai/api/v1/chat/completions"
 OPENROUTER_REFERER = os.getenv(
     "OPENROUTER_REFERER",
@@ -94,6 +90,21 @@ OPENROUTER_REFERER = os.getenv(
 )
 OPENROUTER_TITLE = os.getenv("OPENROUTER_TITLE", "Auto Publish Reels")
 OPENROUTER_RATE_LIMIT_MAX_RETRIES = int(os.getenv("OPENROUTER_RATE_LIMIT_MAX_RETRIES", "4"))
+
+# A prioritized list of free models to try in order. If one fails (404,
+# reasoning-only response, rate limit, etc.), the pipeline automatically
+# moves on to the next. The single model can still be pinned by setting
+# OPENROUTER_MODEL env var explicitly to a single model id.
+_OPENROUTER_MODEL_LIST_RAW = os.getenv(
+    "OPENROUTER_MODEL",
+    "qwen/qwen-2.5-7b-instruct:free,"
+    "mistralai/mistral-nemo:free,"
+    "meta-llama/llama-3.2-3b-instruct:free,"
+    "google/gemma-2-9b-it:free,"
+    "microsoft/phi-3-mini-128k-instruct:free",
+)
+OPENROUTER_MODELS = [m.strip() for m in _OPENROUTER_MODEL_LIST_RAW.split(",") if m.strip()]
+OPENROUTER_MODEL = OPENROUTER_MODELS[0]  # kept for logging/compat
 
 GROQ_MODEL = OPENROUTER_MODEL
 GROQ_MAX_COMPLETION_TOKENS = int(os.getenv("GROQ_MAX_COMPLETION_TOKENS", "2200"))
@@ -509,21 +520,24 @@ SYSTEM_PROMPT = textwrap.dedent(
 ).strip()
 
 
+# ---------------------------------------------------------------------------
+# OpenRouter chat with automatic multi-model fallback
+# ---------------------------------------------------------------------------
 def _groq_chat(
     messages: list[dict[str, str]],
     max_completion_tokens: int = GROQ_MAX_COMPLETION_TOKENS,
     temperature: float = 0.75,
 ) -> str:
-    """Shared OpenRouter chat-completion call, forcing a JSON-object response.
-    Uses openrouter/free router which auto-selects the best available free model.
+    """OpenRouter chat-completion with automatic multi-model fallback.
+
+    Iterates through OPENROUTER_MODELS in order. For each candidate:
+      - 404 (model not available)  -> try next model immediately
+      - 429 (rate limit)           -> brief wait, then try next model
+      - 200 with null content      -> try next model (reasoning-only bug)
+      - 200 with JSON content      -> return it
+
+    Raises only if every model in the list fails.
     """
-    payload: dict[str, Any] = {
-        "model": OPENROUTER_MODEL,
-        "messages": messages,
-        "response_format": {"type": "json_object"},
-        "max_tokens": max_completion_tokens,
-        "temperature": temperature,
-    }
     headers = {
         "Authorization": f"Bearer {OPENROUTER_API_KEY}",
         "Content-Type": "application/json",
@@ -531,46 +545,97 @@ def _groq_chat(
         "X-Title": OPENROUTER_TITLE,
     }
 
-    for rate_limit_attempt in range(1, OPENROUTER_RATE_LIMIT_MAX_RETRIES + 1):
-        resp = requests.post(
-            OPENROUTER_ENDPOINT,
-            headers=headers,
-            json=payload,
-            timeout=120,
-        )
-        if resp.status_code == 429:
-            retry_after = resp.headers.get("Retry-After")
-            wait_seconds = 15.0
-            if retry_after:
-                try:
-                    wait_seconds = float(retry_after)
-                except ValueError:
-                    pass
-            else:
-                match = re.search(r"try again in\s+([0-9.]+)s", resp.text, re.IGNORECASE)
-                if match:
-                    wait_seconds = float(match.group(1))
-            wait_seconds = min(max(wait_seconds, 3.0), 90.0)
-            log.warning(
-                "OpenRouter rate limit (429); waiting %.1fs before retry (%d/%d)",
-                wait_seconds, rate_limit_attempt, OPENROUTER_RATE_LIMIT_MAX_RETRIES,
+    last_error: str = "no models attempted"
+    for model_idx, model_name in enumerate(OPENROUTER_MODELS, start=1):
+        payload: dict[str, Any] = {
+            "model": model_name,
+            "messages": messages,
+            "response_format": {"type": "json_object"},
+            "max_tokens": max_completion_tokens,
+            "temperature": temperature,
+        }
+
+        for rate_limit_attempt in range(1, OPENROUTER_RATE_LIMIT_MAX_RETRIES + 1):
+            try:
+                resp = requests.post(
+                    OPENROUTER_ENDPOINT,
+                    headers=headers,
+                    json=payload,
+                    timeout=120,
+                )
+            except Exception as exc:
+                last_error = f"{model_name}: request failed: {exc}"
+                log.warning("Model %d/%d (%s) request failed: %s",
+                            model_idx, len(OPENROUTER_MODELS), model_name, exc)
+                break
+
+            if resp.status_code == 404:
+                last_error = f"{model_name}: 404 unavailable"
+                log.warning(
+                    "Model %d/%d (%s) unavailable (404); trying next model",
+                    model_idx, len(OPENROUTER_MODELS), model_name,
+                )
+                break
+
+            if resp.status_code == 429:
+                retry_after = resp.headers.get("Retry-After")
+                wait_seconds = 8.0
+                if retry_after:
+                    try:
+                        wait_seconds = float(retry_after)
+                    except ValueError:
+                        pass
+                else:
+                    match = re.search(r"try again in\s+([0-9.]+)s", resp.text, re.IGNORECASE)
+                    if match:
+                        wait_seconds = float(match.group(1))
+                wait_seconds = min(max(wait_seconds, 3.0), 60.0)
+                log.warning(
+                    "Model %d/%d (%s) rate-limited; waiting %.1fs (%d/%d)",
+                    model_idx, len(OPENROUTER_MODELS), model_name,
+                    wait_seconds, rate_limit_attempt, OPENROUTER_RATE_LIMIT_MAX_RETRIES,
+                )
+                time.sleep(wait_seconds + 1.0)
+                if rate_limit_attempt < OPENROUTER_RATE_LIMIT_MAX_RETRIES:
+                    continue
+                last_error = f"{model_name}: persistent 429"
+                break
+
+            if resp.status_code != 200:
+                last_error = f"{model_name}: HTTP {resp.status_code} {resp.text[:200]}"
+                log.warning(
+                    "Model %d/%d (%s) returned HTTP %d; trying next model",
+                    model_idx, len(OPENROUTER_MODELS), model_name, resp.status_code,
+                )
+                break
+
+            data = resp.json()
+            try:
+                choice = data.get("choices", [{}])[0]
+                finish_reason = choice.get("finish_reason")
+                raw_text = (choice.get("message") or {}).get("content") or ""
+            except Exception as exc:
+                last_error = f"{model_name}: malformed response: {exc}"
+                log.warning("Model %s malformed response: %s", model_name, exc)
+                break
+
+            if not raw_text.strip():
+                last_error = f"{model_name}: empty content (finish_reason={finish_reason})"
+                log.warning(
+                    "Model %d/%d (%s) returned empty content (finish_reason=%s); "
+                    "trying next model",
+                    model_idx, len(OPENROUTER_MODELS), model_name, finish_reason,
+                )
+                break
+
+            log.info(
+                "OpenRouter: using model %d/%d (%s)",
+                model_idx, len(OPENROUTER_MODELS), model_name,
             )
-            time.sleep(wait_seconds + 1.0)
-            continue
-        if resp.status_code != 200:
-            raise PipelineError(f"OpenRouter API error {resp.status_code}: {resp.text[:500]}")
-        data = resp.json()
-        raw_text = (
-            data.get("choices", [{}])[0]
-            .get("message", {})
-            .get("content", "")
-        )
-        if not raw_text:
-            raise PipelineError(f"Unexpected OpenRouter response shape: {data}")
-        return raw_text
+            return raw_text
 
     raise PipelineError(
-        f"OpenRouter rate limit (429) persisted after {OPENROUTER_RATE_LIMIT_MAX_RETRIES} internal retries"
+        f"All {len(OPENROUTER_MODELS)} OpenRouter models failed. Last error: {last_error}"
     )
 
 
