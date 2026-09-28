@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       voice_profile:
-        description: "SILMA voice profile for this run"
+        description: "Choose the narrator voice for this video"
         required: false
         type: choice
         options:
@@ -15,6 +15,10 @@ on:
           - rafik_sa
           - egyptian_female
           - hossam
+          - hossam_uploaded
+          - marwan
+          - nassim
+          - ahmed_z
         default: mohamed_elbed
 
 permissions:

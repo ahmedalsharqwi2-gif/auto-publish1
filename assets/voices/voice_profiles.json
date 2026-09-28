@@ -20,6 +20,26 @@
       "label": "Arabic male — Hossam",
       "wav": "assets/voices/hossam.wav",
       "text": "assets/voices/hossam.txt"
+    },
+    "hossam_uploaded": {
+      "label": "Arabic male — Hossam (uploaded sample)",
+      "wav": "assets/voices/hossam_uploaded.wav",
+      "text": "assets/voices/hossam_uploaded.txt"
+    },
+    "marwan": {
+      "label": "Arabic male — Marwan",
+      "wav": "assets/voices/marwan.wav",
+      "text": "assets/voices/marwan.txt"
+    },
+    "nassim": {
+      "label": "Arabic male — Nassim",
+      "wav": "assets/voices/nassim.wav",
+      "text": "assets/voices/nassim.txt"
+    },
+    "ahmed_z": {
+      "label": "Arabic male — Ahmed Z",
+      "wav": "assets/voices/ahmed_z.wav",
+      "text": "assets/voices/ahmed_z.txt"
     }
   }
 }

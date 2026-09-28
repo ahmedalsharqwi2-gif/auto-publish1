@@ -196,6 +196,21 @@ def find_text_problems(text: str) -> tuple[list[str], list[str]]:
     return fatal, warn
 
 
+def _drop_foreign_tokens(text: str) -> tuple[str, int]:
+    """Drop whole tokens containing non-Arabic letters after the model's
+    targeted repair has already failed. This keeps accidental Latin fragments
+    from aborting an otherwise valid Arabic narration without corrupting Arabic
+    words that may be adjacent to punctuation or digits."""
+    kept: list[str] = []
+    removed = 0
+    for token in text.split():
+        if any(ch.isalpha() and not is_arabic_letter(ch) for ch in token):
+            removed += 1
+        else:
+            kept.append(token)
+    return " ".join(kept), removed
+
+
 def enforce_text_quality(
     script: str, reviser: Callable[[str, list[str]], str] | None = None
 ) -> str:
@@ -213,6 +228,16 @@ def enforce_text_quality(
         text, _ = sanitize_for_tts(text)
         text, _ = fix_tashkeel_anomalies(text)
         fatal, warn = find_text_problems(text)
+    if any("حروف غير عربية" in issue for issue in fatal):
+        text, removed = _drop_foreign_tokens(text)
+        if removed:
+            log.warning(
+                "Removed %d non-Arabic token(s) after targeted revision still left Latin text",
+                removed,
+            )
+            text, _ = sanitize_for_tts(text)
+            text, _ = fix_tashkeel_anomalies(text)
+            fatal, warn = find_text_problems(text)
     if fatal:
         raise TextQualityError("Narration failed text-quality checks: " + " | ".join(fatal))
     for w in warn:
