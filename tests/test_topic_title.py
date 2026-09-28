@@ -3,10 +3,12 @@ import unittest
 from unittest.mock import patch
 
 from main import (
+    CHANNEL_BRIEF,
     MIN_SCRIPT_WORDS,
     OUTRO_MIN_WORDS,
     PipelineError,
     SYSTEM_PROMPT,
+    TOPIC_CATEGORIES,
     Topic,
     _proofread_topic_narration,
     generate_topic,
@@ -19,6 +21,13 @@ class CurrentTopicAndEditorialTests(unittest.TestCase):
         self.assertIn("أخرج JSON صالحًا", SYSTEM_PROMPT)
         self.assertIn("narration_script", SYSTEM_PROMPT)
         self.assertIn("scene_keywords_en", SYSTEM_PROMPT)
+
+    def test_generation_policy_matches_channel_and_excludes_unverifiable_topics(self):
+        self.assertIn("أسرار الفضاء", CHANNEL_BRIEF)
+        self.assertIn("أعماق المحيطات", CHANNEL_BRIEF)
+        self.assertIn(CHANNEL_BRIEF, SYSTEM_PROMPT)
+        self.assertNotIn("غرائب دينية موثقة", TOPIC_CATEGORIES)
+        self.assertIn("ممنوع المعجزات", SYSTEM_PROMPT)
 
     def test_proofreader_uses_current_llm_chat_and_preserves_content(self):
         script = "حَقِيقَةٌ " * 60
