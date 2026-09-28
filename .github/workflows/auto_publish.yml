@@ -5,21 +5,10 @@ on:
     - cron: '0 11 * * *'
     - cron: '0 15 * * *'
   workflow_dispatch:
-    inputs:
-      voice_profile:
-        description: "Choose the narrator voice for this video"
-        required: false
-        type: choice
-        options:
-          - mohamed_elbed
-          - rafik_sa
-          - egyptian_female
-          - hossam
-          - hossam_uploaded
-          - marwan
-          - nassim
-          - ahmed_z
-        default: mohamed_elbed
+
+concurrency:
+  group: auto-publish-voice-rotation
+  cancel-in-progress: false
 
 permissions:
   contents: write
@@ -55,22 +44,21 @@ jobs:
         with:
           path: ~/.cache/huggingface
           key: hf-models-v1
-      - name: Validate selected SILMA voice profile
+      - name: Validate rotating SILMA voice profiles
         env:
-          SILMA_REFERENCE_PROFILE: ${{ inputs.voice_profile || 'mohamed_elbed' }}
           SILMA_VOICE_PROFILES_FILE: 'assets/voices/voice_profiles.json'
         run: |
           python - <<'PY'
           import os
           from pathlib import Path
-          from tts_quality import resolve_reference_profile
-          wav, text = resolve_reference_profile(
-              os.environ["SILMA_REFERENCE_PROFILE"],
-              Path(os.environ["SILMA_VOICE_PROFILES_FILE"]),
-          )
-          print(f"Selected voice profile: {os.environ['SILMA_REFERENCE_PROFILE']}")
-          print(f"Reference WAV: {wav}")
-          print(f"Reference text words: {len(text.split())}")
+          import json
+          config = json.loads(Path(os.environ["SILMA_VOICE_PROFILES_FILE"]).read_text())
+          profiles = config.get("profiles", {})
+          assert profiles, "No SILMA voice profiles configured"
+          for profile_id, profile in profiles.items():
+              from tts_quality import resolve_reference_profile
+              wav, text = resolve_reference_profile(profile_id, Path(os.environ["SILMA_VOICE_PROFILES_FILE"]))
+              print(f"Validated rotating profile {profile_id}: {wav} ({len(text.split())} words)")
           PY
       - name: Generate and publish
         env:
@@ -81,7 +69,10 @@ jobs:
           GH_RELEASE_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
+          MIN_AUDIO_SECONDS: '60'
           MAX_AUDIO_SECONDS: '90'
+          REQUIRE_EXTERNAL_SOURCES: 'false'
+          VOICE_ROTATION_ENABLED: 'true'
           TARGET_AUDIO_SECONDS: '89'
           MAX_SCRIPT_WORDS: '165'
           MIN_SCENE_CLIPS: '4'
