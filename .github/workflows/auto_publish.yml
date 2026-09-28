@@ -5,12 +5,6 @@ on:
     - cron: '0 11 * * *'
     - cron: '0 15 * * *'
   workflow_dispatch:
-    inputs:
-      dry_run:
-        description: "Review the checked-in bad narration fixture only; never publish"
-        required: false
-        type: boolean
-        default: false
 
 permissions:
   contents: write
@@ -80,20 +74,13 @@ jobs:
           EDGE_TTS_RATE: '-8%'
           EDGE_TTS_PITCH: '-5Hz'
           MUSIC_VOLUME: '0.07'
-          DRY_RUN: ${{ inputs.dry_run }}
-          DRY_RUN_INPUT_FILE: tests/fixtures/bad_narration.txt
+          DRY_RUN: 'false'
         run: |
           test -f main.py || { echo "ERROR: main.py is missing"; exit 1; }
           test -f tts_quality.py || { echo "ERROR: tts_quality.py is missing"; exit 1; }
           test -f assets/voice_reference_synthetic.wav || { echo "ERROR: reference WAV is missing; run Make SILMA reference voice first"; exit 1; }
           test -f assets/voice_reference_synthetic.txt || { echo "ERROR: reference TXT is missing; run Make SILMA reference voice first"; exit 1; }
           python main.py
-      - name: Upload dry-run result
-        if: ${{ inputs.dry_run == true }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: auto-publish-editorial-dry-run
-          path: work/dry_run_result.json
       - name: Persist topic history
         if: always()
         run: |
