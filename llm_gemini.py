@@ -41,6 +41,7 @@ GEMINI_MODELS = [
 GEMINI_THINKING_LEVEL = os.getenv("GEMINI_THINKING_LEVEL", "low").strip().lower()
 # 0 means do not override the caller's requested output-token limit.
 GEMINI_MIN_OUTPUT_TOKENS = int(os.getenv("GEMINI_MIN_OUTPUT_TOKENS", "0"))
+GEMINI_RETRIES = max(1, int(os.getenv("GEMINI_RETRIES", "3")))
 
 
 def gemini_key_kind() -> str:
@@ -93,13 +94,14 @@ def gemini_chat(
     max_tokens: int = 4000,
     temperature: float = 0.6,
     timeout: int = 120,
-    retries: int = 3,
+    retries: int | None = None,
 ) -> str:
     """Send chat messages to Gemini and return the JSON-mode text reply."""
     if not GEMINI_API_KEY:
         raise RuntimeError("GEMINI_API_KEY is not set")
 
     system, contents = _split_messages(messages)
+    attempts = GEMINI_RETRIES if retries is None else max(1, retries)
     headers = {"x-goog-api-key": GEMINI_API_KEY, "Content-Type": "application/json"}
     last_error = "no models configured"
 
@@ -107,7 +109,7 @@ def gemini_chat(
         url = f"{GEMINI_BASE_URL}/models/{model}:generateContent"
         use_thinking = bool(GEMINI_THINKING_LEVEL)
 
-        for attempt in range(1, retries + 1):
+        for attempt in range(1, attempts + 1):
             requested_tokens = max_tokens
             if GEMINI_MIN_OUTPUT_TOKENS > 0:
                 requested_tokens = max(requested_tokens, GEMINI_MIN_OUTPUT_TOKENS)
@@ -135,7 +137,7 @@ def gemini_chat(
                 last_error = f"{model}: {exc}"
                 log.warning(
                     "Gemini %s attempt %d/%d network error: %s",
-                    model, attempt, retries, exc,
+                    model, attempt, attempts, exc,
                 )
                 time.sleep(3 * attempt)
                 continue
@@ -153,7 +155,7 @@ def gemini_chat(
                 last_error = f"{model}: HTTP {status}"
                 log.warning(
                     "Gemini %s attempt %d/%d: HTTP %d",
-                    model, attempt, retries, status,
+                    model, attempt, attempts, status,
                 )
                 time.sleep(10 * attempt)
                 continue
@@ -203,7 +205,7 @@ def gemini_chat(
             last_error = f"{model}: empty content (finishReason={finish or 'n/a'})"
             log.warning(
                 "Gemini %s returned empty content (attempt %d/%d, finishReason=%s)",
-                model, attempt, retries, finish or "n/a",
+                model, attempt, attempts, finish or "n/a",
             )
             time.sleep(2 * attempt)
 

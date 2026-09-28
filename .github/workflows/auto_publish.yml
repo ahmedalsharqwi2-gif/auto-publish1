@@ -109,11 +109,14 @@ jobs:
           GEMINI_MODEL: 'gemini-3.8-flash'
           GEMINI_THINKING_LEVEL: 'low'
           GEMINI_MIN_OUTPUT_TOKENS: '0'
+          GEMINI_RETRIES: '1'
           LLM_MAX_COMPLETION_TOKENS: '4000'
+          LLM_TIMEOUT: '45'
 
           # --- LLM provider: OpenRouter (optional fallback only) ---
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          OPENROUTER_MODEL: 'google/gemma-4-26b-a4b-it:free,google/gemma-4-31b-it:free,nvidia/nemotron-3-super-120b-a12b:free'
+          OPENROUTER_MODEL: 'nvidia/nemotron-3-super-120b-a12b:free'
+          OPENROUTER_MAX_ATTEMPTS: '1'
           OPENROUTER_TITLE: 'Auto Publish Reels'
 
           PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}

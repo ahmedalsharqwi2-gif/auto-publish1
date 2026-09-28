@@ -98,6 +98,7 @@ OPENROUTER_MODEL = OPENROUTER_MODELS[0] if OPENROUTER_MODELS else ""
 LLM_MAX_COMPLETION_TOKENS = int(os.getenv("LLM_MAX_COMPLETION_TOKENS", "4000"))
 LLM_TIMEOUT = int(os.getenv("LLM_TIMEOUT", "120"))
 LLM_MAX_RETRIES = int(os.getenv("LLM_MAX_RETRIES", "3"))
+OPENROUTER_MAX_ATTEMPTS = max(1, int(os.getenv("OPENROUTER_MAX_ATTEMPTS", "2")))
 
 TTS_ENGINE = os.getenv("TTS_ENGINE", "silma").strip().lower()
 TTS_VOICE = os.getenv("TTS_VOICE", "ar-EG-SalmaNeural")
@@ -448,7 +449,7 @@ def _openrouter_chat(messages: list[dict[str, str]], max_tokens: int, temperatur
             "temperature": temperature,
             "reasoning": {"effort": "low", "exclude": True},
         }
-        for attempt in (1, 2):
+        for attempt in range(1, OPENROUTER_MAX_ATTEMPTS + 1):
             try:
                 resp = requests.post(OPENROUTER_ENDPOINT, headers=headers, json=payload, timeout=LLM_TIMEOUT)
             except Exception as exc:
@@ -458,7 +459,8 @@ def _openrouter_chat(messages: list[dict[str, str]], max_tokens: int, temperatur
             if resp.status_code == 429:
                 last_error = f"{model}: 429"
                 log.warning("OpenRouter %s rate-limited", model)
-                time.sleep(8.0)
+                if attempt < OPENROUTER_MAX_ATTEMPTS:
+                    time.sleep(8.0)
                 continue
             if resp.status_code != 200:
                 last_error = f"{model}: HTTP {resp.status_code} {resp.text[:200]}"
