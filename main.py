@@ -762,11 +762,16 @@ def proofread_narration_tashkeel(
     corrected = with_retries(_call, what="Arabic and factual editorial review")
     orig_words = len(_normalize_for_compare(script).split())
     new_words = len(_normalize_for_compare(corrected).split())
-    if new_words < max(70, int(orig_words * 0.70)) or new_words > int(orig_words * 1.35):
+    # Only compare the review output with its own input. There is deliberately
+    # no absolute minimum: a short, valid draft is not an editorial failure.
+    minimum_preserved_words = max(1, (orig_words * 70 + 99) // 100)
+    maximum_review_words = max(1, (orig_words * 135) // 100)
+    if new_words < minimum_preserved_words or new_words > maximum_review_words:
         raise PipelineError(
-            f"Editorial review changed script length too much ({orig_words} -> {new_words} words)"
+            f"Editorial review changed script length too much ({orig_words} -> {new_words} words; "
+            f"allowed {minimum_preserved_words}..{maximum_review_words})"
         )
-    if len(re.findall(r"[\u0600-\u06FF]", corrected)) < max(40, int(new_words * 2.0)):
+    if len(re.findall(r"[\u0600-\u06FF]", corrected)) < max(1, new_words * 2):
         raise PipelineError("Editorial review returned insufficient Arabic text")
     log.info("Arabic/scientific editorial gate passed (%d -> %d words)", orig_words, new_words)
     return corrected

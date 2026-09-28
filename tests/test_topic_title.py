@@ -71,6 +71,37 @@ class CanonicalTopicTitleTests(unittest.TestCase):
         self.assertEqual(payload["canonical_subject"], "موضوع البنك")
         self.assertEqual(payload["verified_fact"], "حقيقة البنك الثابتة.")
 
+    def test_unchanged_59_word_review_is_not_rejected_by_a_fixed_minimum(self):
+        script = "حَقِيقَةٌ " * 59
+        with patch(
+            "main._groq_chat",
+            return_value=json.dumps({"corrected_text": script}, ensure_ascii=False),
+        ):
+            result = proofread_narration_tashkeel(script)
+
+        self.assertEqual(result, script.strip())
+
+    def test_short_arabic_script_is_not_rejected_by_a_character_floor(self):
+        script = "نَصٌّ عَرَبِيٌّ قَصِيرٌ."
+        with patch(
+            "main._groq_chat",
+            return_value=json.dumps({"corrected_text": script}, ensure_ascii=False),
+        ):
+            result = proofread_narration_tashkeel(script)
+
+        self.assertEqual(result, script)
+
+    def test_proofreader_still_rejects_major_content_deletion(self):
+        script = "حَقِيقَةٌ " * 100
+        with (
+            patch(
+                "main._groq_chat",
+                return_value=json.dumps({"corrected_text": "حَقِيقَةٌ " * 10}, ensure_ascii=False),
+            ),
+            self.assertRaisesRegex(PipelineError, "changed script length too much"),
+        ):
+            proofread_narration_tashkeel(script)
+
     def test_vetted_subject_replaces_unrelated_model_title(self):
         topic = Topic(
             hook_text="ما الذي يحدث؟",
