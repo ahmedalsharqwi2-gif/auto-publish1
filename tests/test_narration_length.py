@@ -2,71 +2,49 @@ import unittest
 from unittest.mock import patch
 
 from main import (
-    MIN_SCRIPT_WORDS,
-    NARRATION_WORD_SAFETY_BUFFER,
+    OUTRO_MAX_WORDS,
     OUTRO_MIN_WORDS,
-    POST_PROOFREAD_TOP_UP_ATTEMPTS,
     PipelineError,
-    Topic,
-    _top_up_underlength_narration,
+    _audio_duration_exceeds_limit,
+    _audio_duration_needs_normalization,
+    _validate_final_script_word_count,
+    build_topic_user_prompt,
 )
 
 
-class PostProofreadNarrationLengthTests(unittest.TestCase):
-    @staticmethod
-    def words(count):
-        return "كلمة " * count
+class MaximumOnlyNarrationLengthTests(unittest.TestCase):
+    def test_short_video_duration_is_allowed_and_90_seconds_is_the_only_cap(self):
+        with patch("main.MAX_AUDIO_SECONDS", 90.0), patch("main.TARGET_AUDIO_SECONDS", 89.0):
+            self.assertFalse(_audio_duration_exceeds_limit(8.5))
+            self.assertFalse(_audio_duration_exceeds_limit(90.0))
+            self.assertTrue(_audio_duration_exceeds_limit(90.01))
+            self.assertFalse(_audio_duration_needs_normalization(8.5))
+            self.assertFalse(_audio_duration_needs_normalization(89.0))
+            self.assertTrue(_audio_duration_needs_normalization(89.01))
 
-    @staticmethod
-    def make_topic(script):
-        return Topic(
-            hook_text="ما هذا؟",
-            narration_script=script,
-            title="موضوع البنك",
-            caption="شرح موثق.",
-            verified_fact="حقيقة البنك المثبتة.",
-            source_urls=["https://example.org/article"],
-        )
+    def test_short_script_with_fixed_outro_is_allowed(self):
+        # One factual narration word plus the fixed CTA has no lower-bound rejection.
+        self.assertIsNone(_validate_final_script_word_count(OUTRO_MIN_WORDS + 1))
 
-    def test_short_reviewed_script_gets_bounded_source_bound_top_ups(self):
-        minimum_before_outro = MIN_SCRIPT_WORDS - OUTRO_MIN_WORDS
-        topic = self.make_topic(self.words(minimum_before_outro - 1))
-        accessible_sources = ["https://example.org/direct-evidence"]
-        expansions = [
-            self.words(minimum_before_outro + 5),
-            self.words(minimum_before_outro + 8),
-        ]
-        reviewed_versions = [
-            self.words(minimum_before_outro - 1),
-            self.words(minimum_before_outro + 1),
-        ]
+    def test_script_above_maximum_is_still_rejected(self):
+        with self.assertRaisesRegex(PipelineError, "maximum"):
+            _validate_final_script_word_count(166)
 
-        with (
-            patch("main.expand_narration_script", side_effect=expansions) as expand,
-            patch("main._proofread_topic_narration", side_effect=reviewed_versions),
-        ):
-            result = _top_up_underlength_narration(topic, accessible_sources)
+    def test_topic_prompt_requests_only_a_maximum_not_a_minimum(self):
+        seed = {
+            "id": "science_test",
+            "category": "science",
+            "subject": "موضوع علمي",
+            "angle": "زاوية اختيارية",
+            "verified_fact": "حقيقة مثبتة",
+        }
+        sources = [{"url": "https://example.org/specific-evidence", "text": "دليل"}]
+        with patch("main.MAX_SCRIPT_WORDS", 165), patch("main.OUTRO_MAX_WORDS", OUTRO_MAX_WORDS):
+            prompt = build_topic_user_prompt(seed, sources)
 
-        self.assertEqual(len(result.split()), minimum_before_outro + 1)
-        self.assertGreaterEqual(len(result.split()) + OUTRO_MIN_WORDS, MIN_SCRIPT_WORDS)
-        self.assertEqual(expand.call_count, 2)
-        self.assertEqual(expand.call_args.args[1], minimum_before_outro + NARRATION_WORD_SAFETY_BUFFER)
-        self.assertEqual(expand.call_args.kwargs["verified_fact"], topic.verified_fact)
-        self.assertEqual(expand.call_args.kwargs["source_urls"], accessible_sources)
-
-    def test_top_up_exhaustion_fails_closed_after_bounded_attempts(self):
-        minimum_before_outro = MIN_SCRIPT_WORDS - OUTRO_MIN_WORDS
-        script = self.words(minimum_before_outro - 1)
-        topic = self.make_topic(script)
-
-        with (
-            patch("main.expand_narration_script", return_value=script) as expand,
-            self.assertRaisesRegex(PipelineError, "bounded top-up attempts"),
-        ):
-            _top_up_underlength_narration(topic, ["https://example.org/direct-evidence"])
-
-        self.assertEqual(expand.call_count, POST_PROOFREAD_TOP_UP_ATTEMPTS)
-        self.assertEqual(topic.narration_script, script)
+        maximum_before_outro = 165 - OUTRO_MAX_WORDS
+        self.assertIn(f"ولا يتجاوز {maximum_before_outro} كلمة", prompt)
+        self.assertNotRegex(prompt, r"narration_script\s+بين\s+\d+\s+و\s+\d+")
 
 
 if __name__ == "__main__":

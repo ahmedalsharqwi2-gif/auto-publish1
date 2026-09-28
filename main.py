@@ -79,18 +79,11 @@ TOPIC_HISTORY_FILE = Path(os.getenv("TOPIC_HISTORY_FILE", "topic_history.json"))
 TOPIC_BANK_FILE = Path(os.getenv("TOPIC_BANK_FILE", "config/topic_bank.json"))
 DRY_RUN = os.getenv("DRY_RUN", "false").lower() == "true"
 DRY_RUN_INPUT_FILE = Path(os.getenv("DRY_RUN_INPUT_FILE", "tests/fixtures/bad_narration.txt"))
-MIN_AUDIO_SECONDS = float(os.getenv("MIN_AUDIO_SECONDS", "85"))
-MAX_AUDIO_SECONDS = float(os.getenv("MAX_AUDIO_SECONDS", "89"))
-TARGET_AUDIO_SECONDS = float(os.getenv("TARGET_AUDIO_SECONDS", "87"))
-MIN_SCRIPT_WORDS = int(os.getenv("MIN_SCRIPT_WORDS", "120"))
+MAX_AUDIO_SECONDS = float(os.getenv("MAX_AUDIO_SECONDS", "90"))
+TARGET_AUDIO_SECONDS = float(os.getenv("TARGET_AUDIO_SECONDS", str(max(1.0, MAX_AUDIO_SECONDS - 1.0))))
 MAX_SCRIPT_WORDS = int(os.getenv("MAX_SCRIPT_WORDS", "165"))
-NARRATION_WORD_SAFETY_BUFFER = 12
-POST_PROOFREAD_TOP_UP_ATTEMPTS = 2
-# Topic generation is the one step whose failures are inherently about
-# content quality/length rather than a network hiccup, so it gets more
-# attempts than the generic MAX_RETRIES (3) used everywhere else — 3 was
-# tight enough that a single Groq rate limit (429) plus one short draft
-# could exhaust the whole budget before a good script ever came through.
+# Topic generation gets a larger retry budget than generic calls because
+# rate limits and malformed model responses can otherwise exhaust the run.
 TOPIC_GENERATION_MAX_ATTEMPTS = int(os.getenv("TOPIC_GENERATION_MAX_ATTEMPTS", "5"))
 HISTORY_LIMIT = int(os.getenv("HISTORY_LIMIT", "1000"))
 MIN_SCENE_CLIPS = int(os.getenv("MIN_SCENE_CLIPS", "10"))
@@ -574,13 +567,13 @@ SYSTEM_PROMPT = textwrap.dedent(
       تذكرها verified_fact أو تدعمها صراحة صفحة من source_urls.
     - لا تجعل السؤال الافتتاحي يوحي بادعاء أقوى من الحقيقة المسجلة. لا يلزم أن
       يحتوي على رقم أو مقارنة أو مفاجأة مصطنعة؛ سؤال واضح وصادق أفضل من هوك مضلل.
-    - لا تضف معلومات عامة عن الموضوع لمجرد إكمال عدد الكلمات. وسّع الشرح بعبارات
-      واضحة ومترابطة حول الحقيقة نفسها فقط، واحذف أي جملة لا يمكن ردّها إلى دليل.
+    - لا تضف معلومات عامة عن الموضوع لمجرد إكمال عدد الكلمات؛ اشرح الحقيقة بالقدر
+      الكافي فقط دون حشو، واحذف أي جملة لا يمكن ردّها إلى دليل.
     - اكتب العربية الفصحى السليمة. شكّل hook_text وnarration_script تشكيلًا كاملًا
       صحيحًا قدر الإمكان لتوجيه النطق، ولا تستخدم العامية أو ألفاظًا مخترعة.
     - يبدأ narration_script بنص hook_text نفسه، وينتهي بعد اكتمال الشرح؛ لا تضف
       طلب إعجاب أو مشاركة أو اشتراك، فالبرنامج يضيف العبارة الختامية الثابتة.
-    - التزم بمدى الكلمات المطلوب في رسالة المستخدم، وبعدد المشاهد المطلوب فيها.
+    - لا يوجد حد أدنى لطول النص؛ التزم بالحد الأعلى للكلمات وعدد المشاهد المطلوب فقط.
     - اجعل كلمات البحث والمشاهد الإنجليزية تصف الشيء المذكور فعلًا في الموضوع أو
       النص، ولا تستخدم كلمات عامة أو لقطات لا علاقة لها به.
 
@@ -589,13 +582,10 @@ SYSTEM_PROMPT = textwrap.dedent(
     """
 ).strip()
 
-# Measured from real production runs: ar-EG-SalmaNeural speaks Arabic at
-# roughly 1.7-1.8 words/second — much slower than a naive estimate would
-# suggest. Facebook Reels hard-caps posts at 90 seconds, so actual TTS duration
-# is checked and must remain in the 85-89 second safety window. MAX_SCRIPT_WORDS is a
-# hard ceiling — scripts longer than this get trimmed at a sentence boundary
-# as a safety net, and MAX_AUDIO_SECONDS is a second, final safety net
-# checked against the *actual* generated audio duration before publishing.
+# Facebook Reels hard-caps posts at 90 seconds. Narration may be shorter; only
+# the actual TTS duration is constrained, with a small speed-normalization
+# margin for any audio that exceeds the maximum. MAX_SCRIPT_WORDS is an
+# additional safety ceiling, not a target or minimum.
 def _groq_chat(
     messages: list[dict[str, str]],
     max_completion_tokens: int = GROQ_MAX_COMPLETION_TOKENS,
@@ -780,112 +770,13 @@ def proofread_narration_tashkeel(
         raise PipelineError("Editorial review returned insufficient Arabic text")
     log.info("Arabic/scientific editorial gate passed (%d -> %d words)", orig_words, new_words)
     return corrected
-# --- Active length correction: top up a short narration_script instead of hoping ---
-# Root cause of the "narration_script only N words even after the engagement
-# outro; Groq output was too short" failures: Groq regularly undershoots the
-# requested 120-165 (ideally ~140) word count by 20-40 words, and the only
-# corrective mechanisms that existed were (1) retrying topic generation from
-# scratch, which has the same odds of coming up short again, and (2)
-# appending the fixed CTA outro (see CTA_OUTRO), which adds only its exact
-# word count — nowhere near enough to cover a 100-word draft.
-# expand_narration_script() closes that gap
-# directly: it sends the short script back to Groq with instructions to ONLY
-# add extra sentences (never reword or shorten what's already there) until
-# it reaches a safe target length, before the CTA outro is appended on top.
-EXPAND_SYSTEM_PROMPT = textwrap.dedent(
-    """
-    أنت محرر نصوص بالعربية الفصحى المشكَّلة. سيصلك نص قصير وverified_fact ثابت
-    من سجل موضوعات مُراجع. أضف جملة أو جملتين فقط لتوضيح الحقيقة نفسها بأسلوب
-    مترابط، ولا تضف أي معلومة جديدة أو تفصيلاً من ذاكرتك.
-
-    إذا لم تسمح verified_fact وحدها بإضافة جملة صحيحة دون تكرار أو حشو، فأعد
-    النص الأصلي كما هو؛ لا تخترع مادة لمجرد بلوغ العدد المطلوب. يمكن للمستخدم
-    تمرير source_urls كمراجع، لكنها لا تبيح أي ادعاء لا يطابق الحقيقة المسجلة.
-
-    ممنوع منعاً باتاً: حذف أي كلمة من النص الأصلي، أو إعادة صياغة أي جملة
-    موجودة بالفعل، أو تكرار معلومة وردت فيه، أو تغيير سؤال الافتتاح (أول
-    جملة) أو المعنى العام للنص. النص الأصلي بالكامل يجب أن يظهر داخل النص
-    النهائي دون أي تعديل، والإضافة الجديدة فقط هي الفرق بينهما. لا تضف أي دعوة
-    للإعجاب أو المشاركة أو الاشتراك؛ سيُلحق البرنامج العبارة الثابتة بعد النص.
-
-    أضف الجملة/الجملتين الجديدتين في أنسب موضع (عادة قبل آخر جملة في النص)،
-    مع تشكيل كامل على كل حرف بنفس معايير التشكيل المستخدمة في بقية النص
-    (تشكيل الإعراب، وحركة الضمائر المتصلة منفصلة عن حركة الحرف الذي قبلها).
-
-    أجب حصراً بكائن JSON بمفتاح واحد فقط: {"expanded_text": "النص الكامل
-    الأصلي دون أي حذف، بعد إضافة الجملة/الجملتين الجديدتين"}.
-    """
-).strip()
-
-
-def expand_narration_script(
-    script: str,
-    target_min_words: int,
-    *,
-    verified_fact: str = "",
-    source_urls: list[str] | None = None,
-) -> str:
-    """Best-effort: ask Groq to ADD 1-2 sentences to `script` (never remove
-    or reword existing ones) until it clears target_min_words words.
-
-    Guarded the same way as proofread_narration_tashkeel: if the call
-    fails, returns malformed JSON, or the "expanded" text doesn't look like
-    a strict addition (fewer/equal words, or the start no longer closely
-    matches the original — a sign Groq rewrote instead of extended), the
-    original script is returned unchanged. A missed expansion just means
-    generate_topic's own retry loop tries again; it's never worse than
-    what happened before this function existed.
-    """
-    def _call() -> str:
-        messages = [
-            {"role": "system", "content": EXPAND_SYSTEM_PROMPT},
-            {"role": "user", "content": json.dumps(
-                {
-                    "text": script,
-                    "verified_fact": verified_fact,
-                    "source_urls": source_urls or [],
-                    "current_word_count": len(script.split()),
-                    "target_minimum_word_count": target_min_words,
-                },
-                ensure_ascii=False,
-            )},
-        ]
-        raw_text = _groq_chat(messages, max_completion_tokens=GROQ_MAX_COMPLETION_TOKENS, temperature=0.6)
-        parsed = extract_json_block(raw_text)
-        expanded = str(parsed.get("expanded_text", "")).strip()
-        if not expanded:
-            raise PipelineError("Expansion pass returned an empty expanded_text")
-        return expanded
-
-    try:
-        expanded = with_retries(_call, what="Groq narration expansion")
-    except PipelineError as exc:
-        log.warning("Narration expansion failed (%s); keeping the short script as-is", exc)
-        return script
-
-    orig_words = _normalize_for_compare(script).split()
-    expanded_words = _normalize_for_compare(expanded).split()
-    if len(expanded_words) <= len(orig_words):
-        log.warning(
-            "Narration expansion did not add words (%d -> %d); keeping the original",
-            len(orig_words), len(expanded_words),
+def _validate_final_script_word_count(word_count: int) -> None:
+    """Enforce only the final-script maximum; short videos are allowed."""
+    if word_count > MAX_SCRIPT_WORDS:
+        raise PipelineError(
+            f"Final narration is {word_count} words; maximum is {MAX_SCRIPT_WORDS} "
+            "including the fixed outro"
         )
-        return script
-    # Cheap "this looks like an addition, not a rewrite" check: the expanded
-    # text's own words, compared against the original, should still be
-    # highly similar overall (an addition changes little of the existing
-    # text; a rewrite changes a lot of it even when it's also longer).
-    similarity = difflib.SequenceMatcher(None, orig_words, expanded_words).ratio()
-    if similarity < 0.75:
-        log.warning(
-            "Narration expansion looks like a rewrite rather than a pure addition "
-            "(similarity %.2f); keeping the original",
-            similarity,
-        )
-        return script
-
-    log.info("Narration expanded from %d to %d words", len(orig_words), len(expanded_words))
-    return expanded
 
 
 def build_topic_user_prompt(seed: dict[str, Any], accessible_sources: list[dict[str, str]]) -> str:
@@ -895,10 +786,6 @@ def build_topic_user_prompt(seed: dict[str, Any], accessible_sources: list[dict[
     if not source_urls:
         raise PipelineError("Cannot write a topic without at least one preflighted source")
 
-    pre_outro_min = min(
-        MAX_SCRIPT_WORDS - OUTRO_MAX_WORDS,
-        MIN_SCRIPT_WORDS - OUTRO_MIN_WORDS + NARRATION_WORD_SAFETY_BUFFER,
-    )
     pre_outro_max = MAX_SCRIPT_WORDS - OUTRO_MAX_WORDS
     bank_entry = {
         "bank_id": seed["id"],
@@ -914,7 +801,7 @@ def build_topic_user_prompt(seed: dict[str, Any], accessible_sources: list[dict[
         "كتلميح أسلوبي اختياري فقط؛ لا تضف مقارنة أو رقمًا أو تفصيلًا لا يسنده verified_fact "
         "أو مصدر متاح. يجب أن يبقى كل ادعاء في السؤال والنص والكابشن ضمن الدليل المرفق.\n\n"
         + json.dumps(bank_entry, ensure_ascii=False)
-        + f"\n\nاكتب narration_script بين {pre_outro_min} و{pre_outro_max} كلمة قبل العبارة الختامية الثابتة. "
+        + f"\n\nاكتب narration_script باختصار طبيعي يشرح الحقيقة بالقدر الكافي دون حشو، ولا يتجاوز {pre_outro_max} كلمة قبل العبارة الختامية الثابتة. "
         "ابدأه بـ hook_text نفسه. أعد category وtitle كما هما تمامًا من المدخل، "
         "واجعل scene_keywords_en بين 4 و7 عبارات مرتبطة بصريًا بالنص. أخرج JSON فقط."
     )
@@ -981,18 +868,10 @@ def generate_topic() -> tuple[Topic, list[dict[str, str]], list[dict[str, str]]]
         topic.source_urls = [str(x) for x in seed.get("source_urls", [])]
         topic.category = str(seed["category"])
 
-        # MIN_SCRIPT_WORDS/MAX_SCRIPT_WORDS bound the FINAL script — Groq's
-        # narration plus the fixed CTA outro appended below — since that
-        # combined text is what actually gets spoken/subtitled. Trimming or
-        # expanding the pre-outro draft has to leave room for the fixed CTA;
-        # its exact word count keeps the final total safely inside
-        # MIN_SCRIPT_WORDS..MAX_SCRIPT_WORDS.
+        # MAX_SCRIPT_WORDS bounds the final narration including the fixed CTA.
+        # There is intentionally no minimum: short, evidence-backed scripts
+        # are preferable to padding a video with unnecessary narration.
         pre_outro_max = MAX_SCRIPT_WORDS - OUTRO_MAX_WORDS
-        pre_outro_min = MIN_SCRIPT_WORDS - OUTRO_MIN_WORDS
-        target_pre_outro_min = min(
-            pre_outro_max,
-            pre_outro_min + NARRATION_WORD_SAFETY_BUFFER,
-        )
 
         if word_count > pre_outro_max:
             log.warning(
@@ -1002,40 +881,11 @@ def generate_topic() -> tuple[Topic, list[dict[str, str]], list[dict[str, str]]]
             )
             topic.narration_script = _trim_script_to_word_limit(topic.narration_script, pre_outro_max)
             word_count = len(topic.narration_script.split())
-        elif word_count < target_pre_outro_min:
-            # This is the actual fix for the recurring "Groq output was too
-            # short" failure: a script this far under target used to just
-            # get a warning and the fixed CTA outro appended on top, which
-            # adds only its fixed word count — nowhere near enough when
-            # Groq hands back ~100 words instead of the requested ~140.
-            # Actively expand it first, with a safety buffer for later text
-            # review and foreign-token cleanup.
-            log.warning(
-                "narration_script short (%d words, target >=%d before the outro); asking Groq to "
-                "expand it instead of relying on the outro alone",
-                word_count, target_pre_outro_min,
-            )
-            topic.narration_script = expand_narration_script(
-                topic.narration_script,
-                target_pre_outro_min,
-                verified_fact=topic.verified_fact,
-                source_urls=[source["url"] for source in prefetched_sources],
-            )
-            word_count = len(topic.narration_script.split())
 
         # Account for the fixed closing phrase in the final video duration,
         # but append it only after text proofreading/cleanup in the pipeline.
         final_word_count = word_count + OUTRO_MIN_WORDS
-        if not MIN_SCRIPT_WORDS <= final_word_count <= MAX_SCRIPT_WORDS:
-            # Should be rare now that a short draft is actively expanded
-            # above — this stays only as a last-resort safety net (e.g. the
-            # expansion pass itself failed) so an under/over-length video is
-            # never published silently. with_retries below still picks this
-            # up as one more topic-generation attempt.
-            raise PipelineError(
-                f"narration_script plus the fixed outro would be {final_word_count} words; "
-                f"allowed range is {MIN_SCRIPT_WORDS}..{MAX_SCRIPT_WORDS}"
-            )
+        _validate_final_script_word_count(final_word_count)
 
         if len(topic.scene_keywords_en) < MIN_SCENE_CLIPS:
             raise PipelineError(
@@ -1075,47 +925,6 @@ def _proofread_topic_narration(topic: Topic, script: str) -> str:
             verified_fact=topic.verified_fact,
         ),
     )
-
-
-def _top_up_underlength_narration(topic: Topic, accessible_source_urls: list[str]) -> str:
-    """Repair a short post-proofread draft before the fixed CTA is appended."""
-    minimum_before_outro = MIN_SCRIPT_WORDS - OUTRO_MIN_WORDS
-    maximum_before_outro = MAX_SCRIPT_WORDS - OUTRO_MAX_WORDS
-    target_words = min(
-        maximum_before_outro,
-        minimum_before_outro + NARRATION_WORD_SAFETY_BUFFER,
-    )
-
-    for attempt in range(1, POST_PROOFREAD_TOP_UP_ATTEMPTS + 1):
-        current_words = len(topic.narration_script.split())
-        if current_words >= minimum_before_outro:
-            return topic.narration_script
-        log.warning(
-            "Post-proofread narration is short (%d words; need %d before the fixed outro); "
-            "requesting a source-bound top-up (%d/%d)",
-            current_words,
-            minimum_before_outro,
-            attempt,
-            POST_PROOFREAD_TOP_UP_ATTEMPTS,
-        )
-        expanded = expand_narration_script(
-            topic.narration_script,
-            target_words,
-            verified_fact=topic.verified_fact,
-            source_urls=accessible_source_urls,
-        )
-        if len(expanded.split()) <= current_words:
-            log.warning("Post-proofread top-up did not add words; will not alter the script blindly")
-            continue
-        topic.narration_script = _proofread_topic_narration(topic, expanded)
-
-    final_words = len(topic.narration_script.split())
-    if final_words < minimum_before_outro:
-        raise PipelineError(
-            f"Narration remains {final_words} words before the fixed outro after "
-            f"{POST_PROOFREAD_TOP_UP_ATTEMPTS} bounded top-up attempts; minimum is {minimum_before_outro}"
-        )
-    return topic.narration_script
 
 
 # ---------------------------------------------------------------------------
@@ -1479,6 +1288,16 @@ def get_media_duration(path: Path) -> float:
         capture_output=True, text=True, check=True,
     )
     return float(result.stdout.strip())
+
+
+def _audio_duration_exceeds_limit(duration_seconds: float) -> bool:
+    """Return true only when the actual voiceover exceeds the hard cap."""
+    return duration_seconds > MAX_AUDIO_SECONDS
+
+
+def _audio_duration_needs_normalization(duration_seconds: float) -> bool:
+    """Leave short clips untouched; only normalize audio above the safety target."""
+    return duration_seconds > TARGET_AUDIO_SECONDS
 
 
 def normalize_narration_duration(audio_path: Path, target_seconds: float) -> float:
@@ -2249,19 +2068,11 @@ def run_pipeline() -> None:
     # is written with the already-proofread script, so the saved record
     # always matches exactly what generate_tts receives.
     topic.narration_script = _proofread_topic_narration(topic, topic.narration_script)
-    topic.narration_script = _top_up_underlength_narration(
-        topic,
-        [source["url"] for source in prefetched_sources],
-    )
     # Proofreading is intentionally complete before appending the fixed CTA,
     # so no language model can rewrite, shorten, or remove the user's exact words.
     topic.narration_script = _append_engagement_outro(topic.narration_script)
     final_word_count = len(topic.narration_script.split())
-    if not MIN_SCRIPT_WORDS <= final_word_count <= MAX_SCRIPT_WORDS:
-        raise PipelineError(
-            f"Final narration is {final_word_count} words; allowed range is "
-            f"{MIN_SCRIPT_WORDS}..{MAX_SCRIPT_WORDS} after proofreading and the fixed outro"
-        )
+    _validate_final_script_word_count(final_word_count)
     red_flag = find_content_red_flag(topic.narration_script)
     if red_flag:
         raise PipelineError(f"Rejected hallucinated or nonstandard content term: {red_flag}")
@@ -2295,22 +2106,22 @@ def run_pipeline() -> None:
         narration_path = generate_tts(topic.narration_script, run_dir / "narration.mp3")
         audio_duration = get_media_duration(narration_path)
         log.info("Narration audio duration: %.1fs (attempt %d/%d)", audio_duration, attempt, max_duration_attempts)
-        if audio_duration < MIN_AUDIO_SECONDS or audio_duration > MAX_AUDIO_SECONDS:
+        if _audio_duration_needs_normalization(audio_duration):
             log.warning(
-                "Narration is %.1fs; correcting speed to the safe target %.1fs instead of generating another topic",
-                audio_duration, TARGET_AUDIO_SECONDS,
+                "Narration exceeds the %.1fs safe target at %.1fs; correcting speed to %.1fs",
+                TARGET_AUDIO_SECONDS, audio_duration, TARGET_AUDIO_SECONDS,
             )
             audio_duration = normalize_narration_duration(narration_path, TARGET_AUDIO_SECONDS)
-        if MIN_AUDIO_SECONDS <= audio_duration <= MAX_AUDIO_SECONDS:
+        if not _audio_duration_exceeds_limit(audio_duration):
             break
         log.warning(
-            "Narration remains %.1fs after normalization; retrying TTS only (attempt %d/%d)",
-            audio_duration, attempt, max_duration_attempts,
+            "Narration remains over %.1fs after normalization (%.1fs); retrying TTS only (attempt %d/%d)",
+            MAX_AUDIO_SECONDS, audio_duration, attempt, max_duration_attempts,
         )
         if attempt == max_duration_attempts:
             raise PipelineError(
-                f"Narration audio did not reach the target {MIN_AUDIO_SECONDS:.0f}-{MAX_AUDIO_SECONDS:.0f}s range "
-                f"after {max_duration_attempts} attempts — aborting rather than publish the wrong length"
+                f"Narration audio still exceeds the {MAX_AUDIO_SECONDS:.0f}s maximum after "
+                f"{max_duration_attempts} attempts — aborting rather than publish an overlong video"
             )
         # Keep the same topic; a duration mismatch is a voice-speed issue, not
         # a reason to spend another Groq request or risk topic repetition.
@@ -2350,6 +2161,13 @@ def run_pipeline() -> None:
     final_video_path = assemble_video(
         bg_video_path, narration_path, subtitle_path, run_dir / "final.mp4", music_path=music_path,
     )
+    final_video_duration = get_media_duration(final_video_path)
+    if _audio_duration_exceeds_limit(final_video_duration):
+        raise PipelineError(
+            f"Assembled video is {final_video_duration:.2f}s; the maximum is "
+            f"{MAX_AUDIO_SECONDS:.0f}s. Publishing is blocked."
+        )
+    log.info("Assembled video duration: %.2fs (maximum %.0fs)", final_video_duration, MAX_AUDIO_SECONDS)
 
     result = publish_video(final_video_path, topic, BUFFER_CHANNEL_IDS)
     (run_dir / "publish_result.json").write_text(

@@ -8,7 +8,6 @@ from main import (
     PipelineError,
     Topic,
     build_topic_user_prompt,
-    expand_narration_script,
     generate_topic,
     proofread_narration_tashkeel,
     set_canonical_topic_title,
@@ -54,25 +53,6 @@ class CanonicalTopicTitleTests(unittest.TestCase):
         }
         with self.assertRaisesRegex(PipelineError, "preflighted source"):
             build_topic_user_prompt(seed, [])
-
-    def test_expansion_receives_the_bank_fact_and_accessible_sources(self):
-        script = "شَرْحٌ " * 80
-        expanded = script + "تَوْضِيحٌ " * 20
-        with patch(
-            "main._groq_chat",
-            return_value=json.dumps({"expanded_text": expanded}, ensure_ascii=False),
-        ) as groq:
-            result = expand_narration_script(
-                script,
-                90,
-                verified_fact="حقيقة البنك الثابتة.",
-                source_urls=["https://example.org/evidence"],
-            )
-
-        payload = json.loads(groq.call_args.args[0][1]["content"])
-        self.assertEqual(result, expanded.strip())
-        self.assertEqual(payload["verified_fact"], "حقيقة البنك الثابتة.")
-        self.assertEqual(payload["source_urls"], ["https://example.org/evidence"])
 
     def test_proofreader_receives_the_canonical_subject_and_verified_fact(self):
         script = "حَقِيقَةٌ " * 100

@@ -39,7 +39,9 @@ FETCH_TIMEOUT = float(os.getenv("FACT_CHECK_FETCH_TIMEOUT", "20"))
 MAX_SOURCE_CHARS = int(os.getenv("FACT_CHECK_MAX_SOURCE_CHARS", "6000"))
 MAX_TOTAL_SOURCE_CHARS = int(os.getenv("FACT_CHECK_MAX_TOTAL_SOURCE_CHARS", "8000"))
 GROQ_RATE_LIMIT_MAX_RETRIES = max(0, int(os.getenv("FACT_CHECK_GROQ_MAX_RETRIES", "4")))
-FACT_CHECK_MAX_COMPLETION_TOKENS = max(256, int(os.getenv("FACT_CHECK_MAX_COMPLETION_TOKENS", "900")))
+GROQ_JSON_FORMAT_MAX_RETRIES = max(0, int(os.getenv("FACT_CHECK_JSON_FORMAT_MAX_RETRIES", "1")))
+MAX_GROQ_COMPLETION_TOKENS = 4096
+FACT_CHECK_MAX_COMPLETION_TOKENS = max(1024, int(os.getenv("FACT_CHECK_MAX_COMPLETION_TOKENS", "2048")))
 USER_AGENT = "auto-publish1-fact-check/1.0 (+https://github.com/ahmedalsharqwi2-gif/auto-publish1)"
 _SOURCE_CACHE: dict[tuple[str, tuple[str, ...]], dict[str, str]] = {}
 CLAIM_EXTRACTION_SCHEMA: dict[str, Any] = {
@@ -265,25 +267,43 @@ def _groq_json(
             f"Fact Check model {FACT_CHECK_MODEL!r} does not support Groq strict JSON Schema; "
             f"choose one of {sorted(STRICT_JSON_SCHEMA_MODELS)}"
         )
-    payload = {
-        "model": FACT_CHECK_MODEL,
-        "temperature": 0,
-        "max_completion_tokens": max_tokens,
-        "response_format": {
-            "type": "json_schema",
-            "json_schema": {
-                "name": schema_name,
-                "strict": True,
-                "schema": schema,
-            },
-        },
-        "messages": [
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
-    }
+    completion_tokens = max(256, int(max_tokens))
+    format_retries = 0
     rate_limit_retries = 0
+
+    def retry_with_more_tokens(reason: str) -> bool:
+        nonlocal completion_tokens, format_retries
+        next_budget = min(max(completion_tokens * 2, 2048), MAX_GROQ_COMPLETION_TOKENS)
+        if format_retries >= GROQ_JSON_FORMAT_MAX_RETRIES or next_budget <= completion_tokens:
+            return False
+        format_retries += 1
+        log.warning(
+            "Groq %s for %s; retrying with %d completion tokens (%d/%d)",
+            reason, schema_name, next_budget, format_retries, GROQ_JSON_FORMAT_MAX_RETRIES,
+        )
+        completion_tokens = next_budget
+        return True
+
     while True:
+        payload = {
+            "model": FACT_CHECK_MODEL,
+            "temperature": 0,
+            "max_completion_tokens": completion_tokens,
+            "reasoning_effort": "low",
+            "include_reasoning": False,
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": schema_name,
+                    "strict": True,
+                    "schema": schema,
+                },
+            },
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+        }
         response = requests.post(
             GROQ_ENDPOINT,
             headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
@@ -313,18 +333,25 @@ def _groq_json(
             error = error_body.get("error", {}) if isinstance(error_body, dict) else {}
             error_code = error.get("code") if isinstance(error, dict) else None
             if error_code == "json_validate_failed" or "json_validate_failed" in error_text:
+                if retry_with_more_tokens("strict JSON generation failed"):
+                    continue
                 raise FactCheckError(
-                    f"Groq rejected strict Fact Check JSON Schema {schema_name!r}; "
+                    f"Groq could not complete strict Fact Check JSON Schema {schema_name!r} "
+                    f"after {format_retries} format retry/retries; "
                     f"refusing an unconstrained text fallback: {error_text[:500]}"
                 )
         if response.status_code != 200:
             raise FactCheckError(f"Groq Fact Check request failed ({response.status_code}): {response.text[:500]}")
-        break
-    try:
-        content = response.json()["choices"][0]["message"]["content"]
-    except (KeyError, IndexError, TypeError, json.JSONDecodeError) as exc:
-        raise FactCheckError("Groq Fact Check response has an unexpected shape") from exc
-    return _json_from_model(content)
+        try:
+            choice = response.json()["choices"][0]
+            content = choice["message"]["content"]
+        except (KeyError, IndexError, TypeError, json.JSONDecodeError) as exc:
+            raise FactCheckError("Groq Fact Check response has an unexpected shape") from exc
+        if not isinstance(content, str) or not content.strip() or choice.get("finish_reason") == "length":
+            if retry_with_more_tokens("returned an empty/truncated strict JSON response"):
+                continue
+            raise FactCheckError("Groq Fact Check returned an empty or truncated strict JSON response")
+        return _json_from_model(content)
 
 
 def _extract_claims(script: str, verified_fact: str) -> list[dict[str, Any]]:
@@ -337,7 +364,7 @@ importance يجب أن تكون core أو supporting، وnumeric قيمة منط
         json.dumps({"verified_fact": verified_fact, "script": script}, ensure_ascii=False),
         schema_name="fact_check_claims",
         schema=CLAIM_EXTRACTION_SCHEMA,
-        max_tokens=700,
+        max_tokens=2048,
     )
     claims = result.get("claims", [])
     if not isinstance(claims, list) or not claims:

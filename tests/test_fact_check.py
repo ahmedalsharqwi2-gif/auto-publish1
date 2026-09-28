@@ -205,6 +205,8 @@ class GroqRateLimitRetryTests(unittest.TestCase):
         self.assertEqual(response_format["json_schema"]["name"], "test_claims")
         self.assertTrue(response_format["json_schema"]["strict"])
         self.assertEqual(response_format["json_schema"]["schema"], CLAIM_EXTRACTION_SCHEMA)
+        self.assertEqual(post.call_args.kwargs["json"]["reasoning_effort"], "low")
+        self.assertFalse(post.call_args.kwargs["json"]["include_reasoning"])
 
     def test_model_without_strict_schema_support_is_rejected_before_request(self):
         with (
@@ -231,6 +233,7 @@ class GroqRateLimitRetryTests(unittest.TestCase):
         )
         with (
             patch("fact_check.GROQ_API_KEY", "test-key"),
+            patch("fact_check.GROQ_JSON_FORMAT_MAX_RETRIES", 0),
             patch("fact_check.requests.post", return_value=rejected_schema) as post,
             self.assertRaisesRegex(FactCheckError, "refusing an unconstrained text fallback"),
         ):
@@ -243,6 +246,43 @@ class GroqRateLimitRetryTests(unittest.TestCase):
             )
 
         self.assertEqual(post.call_count, 1)
+
+    def test_strict_json_validation_failure_retries_once_with_more_tokens(self):
+        rejected_schema = SimpleNamespace(
+            status_code=400,
+            headers={},
+            text='{"error":{"code":"json_validate_failed","failed_generation":""}}',
+            json=lambda: {"error": {"code": "json_validate_failed"}},
+        )
+        success = SimpleNamespace(
+            status_code=200,
+            headers={},
+            text="",
+            json=lambda: {"choices": [{"message": {"content": '{"claims": []}'}}]},
+        )
+        with (
+            patch("fact_check.GROQ_API_KEY", "test-key"),
+            patch("fact_check.GROQ_JSON_FORMAT_MAX_RETRIES", 1),
+            patch("fact_check.requests.post", side_effect=[rejected_schema, success]) as post,
+        ):
+            result = _groq_json(
+                "extract claims",
+                "script",
+                schema_name="test_claims",
+                schema=CLAIM_EXTRACTION_SCHEMA,
+                max_tokens=1024,
+            )
+
+        self.assertEqual(result, {"claims": []})
+        self.assertEqual(post.call_count, 2)
+        self.assertEqual(
+            [call.kwargs["json"]["max_completion_tokens"] for call in post.call_args_list],
+            [1024, 2048],
+        )
+        self.assertTrue(all(
+            call.kwargs["json"]["response_format"]["json_schema"]["strict"]
+            for call in post.call_args_list
+        ))
 
     def test_other_400_errors_are_not_retried_as_strict_schema_failures(self):
         bad_request = SimpleNamespace(
@@ -296,6 +336,7 @@ class GroqRateLimitRetryTests(unittest.TestCase):
         self.assertEqual(claims[0]["claim"], "ادعاء موثق")
         self.assertEqual(call.call_args.kwargs["schema_name"], "fact_check_claims")
         self.assertEqual(call.call_args.kwargs["schema"], CLAIM_EXTRACTION_SCHEMA)
+        self.assertEqual(call.call_args.kwargs["max_tokens"], 2048)
 
         sources = [{"url": "https://example.org/a", "text": "دليل"}]
         with patch(

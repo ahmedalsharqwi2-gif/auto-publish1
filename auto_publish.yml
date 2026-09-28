@@ -67,10 +67,8 @@ jobs:
           GH_RELEASE_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-          MIN_AUDIO_SECONDS: '85'
-          MAX_AUDIO_SECONDS: '89'
-          TARGET_AUDIO_SECONDS: '87'
-          MIN_SCRIPT_WORDS: '135'
+          MAX_AUDIO_SECONDS: '90'
+          TARGET_AUDIO_SECONDS: '89'
           MAX_SCRIPT_WORDS: '165'
           MIN_SCENE_CLIPS: '4'
           TOPIC_HISTORY_FILE: 'topic_history.json'
