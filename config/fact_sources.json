@@ -47,7 +47,8 @@
     "micro.magnet.fsu.edu",
     "bsesc.energy.gov",
     "courses.ems.psu.edu",
-    "www.amnh.org"
+    "www.amnh.org",
+    "utexas.edu"
   ],
   "minimum_confidence": 0.85,
   "max_contradicted_claims": 0,

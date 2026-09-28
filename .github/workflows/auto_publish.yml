@@ -91,6 +91,10 @@ jobs:
           TOPIC_BANK_FILE: 'config/topic_bank.json'
           FACT_CHECK_SOURCES_FILE: 'config/fact_sources.json'
           FACT_CHECK_MIN_CONFIDENCE: '0.85'
+          FACT_CHECK_MAX_SOURCE_CHARS: '6000'
+          FACT_CHECK_MAX_TOTAL_SOURCE_CHARS: '8000'
+          FACT_CHECK_MAX_COMPLETION_TOKENS: '900'
+          FACT_CHECK_GROQ_MAX_RETRIES: '4'
           TTS_ENGINE: 'silma'
           SILMA_REFERENCE_PROFILE: ${{ inputs.voice_profile || 'mohamed_elbed' }}
           SILMA_VOICE_PROFILES_FILE: 'assets/voices/voice_profiles.json'

@@ -1,11 +1,12 @@
 import json
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import requests
 
-from fact_check import fact_check_topic, preflight_topic_sources
+from fact_check import MAX_TOTAL_SOURCE_CHARS, FactCheckError, _groq_json, fact_check_topic, fetch_source, preflight_topic_sources
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -106,6 +107,86 @@ class FactCheckSourceFallbackTests(unittest.TestCase):
 
         self.assertEqual(sources, [good])
         self.assertEqual(errors, [{"url": self.topic["source_urls"][0], "error": "403 Forbidden"}])
+
+    def test_fact_check_payload_respects_total_source_character_budget(self):
+        sources = [
+            {"url": self.topic["source_urls"][0], "text": "A" * 7000},
+            {"url": self.topic["source_urls"][1], "text": "B" * 7000},
+        ]
+        verdict = {
+            "claims": [{
+                "claim": "A supported scientific claim.",
+                "verdict": "supported",
+                "confidence": 0.95,
+                "evidence_quote": "official evidence",
+                "source_url": sources[0]["url"],
+                "reason": "Directly supported.",
+            }],
+            "overall_reason": "Supported by the accessible sources.",
+        }
+        with (
+            patch("fact_check._load_config", return_value=self.config),
+            patch("fact_check.fetch_source", side_effect=sources),
+            patch("fact_check._extract_claims", return_value=[{"claim": "A supported scientific claim."}]),
+            patch("fact_check._judge_claims", return_value=verdict) as judge,
+        ):
+            report = fact_check_topic(self.topic)
+
+        evidence = judge.call_args.args[3]
+        self.assertLessEqual(sum(len(source["text"]) for source in evidence), MAX_TOTAL_SOURCE_CHARS)
+        self.assertEqual(report["status"], "PASS")
+
+
+class GroqRateLimitRetryTests(unittest.TestCase):
+    def test_retries_transient_429_using_provider_reset_hint(self):
+        limited = SimpleNamespace(
+            status_code=429,
+            headers={},
+            text="Rate limit. Please try again in 9.5925s.",
+        )
+        success = SimpleNamespace(
+            status_code=200,
+            headers={},
+            text="",
+            json=lambda: {"choices": [{"message": {"content": '{"claims": []}'}}]},
+        )
+        with (
+            patch("fact_check.GROQ_API_KEY", "test-key"),
+            patch("fact_check.requests.post", side_effect=[limited, success]) as post,
+            patch("fact_check.time.sleep") as sleep,
+        ):
+            result = _groq_json("system", "user", max_tokens=700)
+
+        self.assertEqual(result, {"claims": []})
+        self.assertEqual(post.call_count, 2)
+        self.assertAlmostEqual(sleep.call_args.args[0], 10.5925)
+        self.assertEqual(post.call_args_list[0].kwargs["json"]["max_tokens"], 700)
+
+    def test_persistent_429_is_bounded_and_fails_closed(self):
+        limited = SimpleNamespace(status_code=429, headers={"Retry-After": "0"}, text="still limited")
+        with (
+            patch("fact_check.GROQ_API_KEY", "test-key"),
+            patch("fact_check.GROQ_RATE_LIMIT_MAX_RETRIES", 2),
+            patch("fact_check.requests.post", return_value=limited) as post,
+            patch("fact_check.time.sleep") as sleep,
+            self.assertRaisesRegex(FactCheckError, "persisted after 2 retries"),
+        ):
+            _groq_json("system", "user")
+
+        self.assertEqual(post.call_count, 3)
+        self.assertEqual(sleep.call_count, 2)
+
+    def test_generic_noaa_nasa_indexes_are_rejected_before_network_fetch(self):
+        indexes = [
+            "https://oceanservice.noaa.gov/facts/",
+            "https://science.nasa.gov/earth/facts/",
+            "https://science.nasa.gov/mars/facts/",
+        ]
+        with patch("fact_check.requests.get") as get:
+            for url in indexes:
+                with self.subTest(url=url), self.assertRaisesRegex(FactCheckError, "generic index"):
+                    fetch_source(url, ["noaa.gov", "nasa.gov"])
+        get.assert_not_called()
 
 
 class SpecificNOAASourceTests(unittest.TestCase):

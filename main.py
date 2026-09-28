@@ -260,6 +260,14 @@ class Topic:
     source_urls: list[str] = field(default_factory=list)
 
 
+def set_canonical_topic_title(topic: Topic, seed: dict[str, Any]) -> None:
+    """Use the vetted topic-bank subject as the published title, never a model invention."""
+    subject = str(seed.get("subject", "")).strip()
+    if not subject:
+        raise PipelineError("Selected topic-bank seed is missing its canonical subject")
+    topic.title = subject
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -533,152 +541,49 @@ def extract_json_block(text: str) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# Step 1: Topic generation (Groq)
+# Step 1: Select a vetted topic-bank entry, then draft its script (Groq)
 # ---------------------------------------------------------------------------
 
 SYSTEM_PROMPT = textwrap.dedent(
     """
-    أنت خبير عالمي في التسويق الفيروسي (Viral Marketing) وصناعة محتوى الفيديوهات
-    القصيرة (Shorts/Reels/TikTok) باللغة العربية. مهمتك اختيار فكرة/موضوع واحد فقط
-    لفيديو اليوم من أي نوع من أنواع الغرائب والعجائب، دون التقيد بمجال واحد، مثل:
-    الغرائب الدينية الموثقة، عجائب عالم الحيوان، غرائب جسم الإنسان والطب،
-    الحقائق العلمية الصادمة، أسرار الفضاء والمحيطات، الظواهر الطبيعية النادرة،
-    القصص التاريخية الغريبة، الحضارات والعادات والثقافات غير المألوفة،
-    الاختراعات والظواهر التقنية، الأماكن الغامضة، والحقائق النفسية والاجتماعية.
-    نوّع المجال إلزامياً من فيديو إلى آخر. ستصلك في رسالة المستخدم قائمة بآخر الفئات
-    (category) التي استُخدمت في الفيديوهات الأخيرة — يُمنع منعاً باتاً اختيار أي فئة
-    مذكورة في تلك القائمة الآن، حتى لو كانت الفضاء أو العلوم أسهل في الإنتاج من غيرها.
-    في الموضوعات الدينية استخدم مصادر أو أحداثاً موثقة ومحترمة، ولا تنسب حديثاً أو
-    آية أو معجزة إلى الدين دون تحقق، ولا تخلط بين الحقيقة والرواية الشعبية.
-    وفي الموضوعات الطبية والعلمية والتاريخية لا تختلق أرقاماً أو ادعاءات، وميّز بوضوح
-    بين الحقيقة المثبتة والفرضية والحكاية المتداولة.
-    قبل إخراج JSON راجع كل جملة كمدقق علمي: لا توجد وحدة قياس أو عملية أو مصطلح
-    غير معتمد، ولا تشرح الظاهرة بعلاقة سببية غير صحيحة. إذا كان السؤال مبنياً
-    على خرافة أو وصف فيروسي مضلل، اجعل الإجابة تصحح الخرافة صراحةً، واختر موضوعاً
-    آخر إذا لم تستطع صياغة تفسير موثوق. راجع العربية كلمة كلمة؛ لا تسلّم مسودة
-    أولى أو ترجمة حرفية، ولا تستخدم التشكيل لإخفاء كلمة غير صحيحة. لا تستخدم مصطلحاً علمياً أو وحدة قياس غير معتمدة، ولا تبرر ادعاءً فيروسياً خاطئاً بتفسير مختلق.
+    أنت محرر سكريبتات عربية، ولست مولّد موضوعات. البرنامج اختار مسبقًا موضوعًا
+    من بنك مُراجع؛ لا تختَر موضوعًا جديدًا، ولا تستبدل الكائن أو الظاهرة، ولا تضف
+    إلى العنوان صفة أو رقمًا أو مقارنة غير موجودة في سجل البنك.
 
-    اختر موضوعاً لم يُستهلك بشكل مبتذل، وله معدل جذب مرتفع (High Hook Rate) في أول
-    3 ثوانٍ (High-CTR). أجب حصراً بكائن JSON صالح دون أي نص إضافي أو علامات كود،
-    بالمفاتيح التالية:
+    مصدر الحقيقة الوحيد هو verified_fact والصفحات المحددة في source_urls التي
+    وصلت في رسالة المستخدم. angle تلميح أسلوبي اختياري، وليس دليلًا أو إذنًا
+    بإضافة مقارنة. إذا تعارضت زاوية مع الحقيقة أو لم تسندها المصادر، تجاهل الزاوية
+    واشرح الحقيقة مباشرة. عند الشك احذف التفصيل بدل تخمينه.
 
+    أخرج JSON صالحًا فقط بالمفاتيح التالية:
     {
-      "category": "اختر فئة واحدة فقط بالضبط من هذه القائمة (انسخ النص كما هو): غرائب دينية موثقة / عجائب عالم الحيوان / غرائب جسم الإنسان والطب / حقائق علمية صادمة / أسرار الفضاء والمحيطات / ظواهر طبيعية نادرة / قصص تاريخية غريبة / حضارات وعادات وثقافات غير مألوفة / اختراعات وظواهر تقنية / أماكن غامضة / حقائق نفسية واجتماعية — بشرط ألا تكون من الفئات الممنوعة المذكورة في رسالة المستخدم",
-      "hook_text": "سؤال واحد فقط، غريب وغير متوقع ومثير للفضول، بالعربية الفصحى المبسطة، يُفتتح به الفيديو. يجب أن يُصاغ حرفياً كسؤال ينتهي بعلامة استفهام (؟)، ولا يكشف الإجابة إطلاقاً، ولا يتجاوز 12 كلمة. الهدف الوحيد منه أن يجعل المشاهد غير قادر على تجاوز الفيديو قبل معرفة الإجابة. شكّله تشكيلاً كاملاً على كل حرف (لا تشكيلاً جزئياً) — التشكيل لن يظهر في الترجمة المعروضة على الشاشة، فقط يضبط نطق صوت التعليق",
-      "narration_script": "السكريبت الكامل الذي سيُروى بصوت التعليق ويظهر كترجمة على الفيديو (بعد حذف التشكيل من نسخة الترجمة فقط — انظر تعليمات التشكيل أدناه). يبدأ بـ hook_text حرفياً ثم يجيب عنه بتفاصيل موثوقة ومثيرة في فقرات مترابطة، وينتهي عند اكتمال الشرح دون خاتمة دعائية أو طلب تفاعل. طول هذا الحقل قبل عبارة الإغلاق الثابتة التي يضيفها البرنامج يكون ضمن النطاق المحدد في رسالة المستخدم، ومقسَّم إلى جمل قصيرة واضحة ومشكَّل تشكيلاً كاملاً على كل حرف.",
-      "title": "عنوان جذاب قصير بالعربية",
-      "caption": "كابشن للمنشور بالعربية، 1-3 جمل",
+      "category": "انسخ الفئة الواردة في سجل البنك حرفيًا",
+      "hook_text": "سؤال عربي فصيح قصير، لا يتجاوز 12 كلمة، ولا يفترض حقيقة غير موثقة",
+      "narration_script": "نص عربي مترابط يبدأ بـ hook_text حرفيًا ويشرح الحقيقة المسجلة فقط، دون خاتمة تفاعلية",
+      "title": "انسخ subject الوارد في سجل البنك حرفيًا دون إضافة أي كلمة",
+      "caption": "جملة أو جملتان تصفان الموضوع والحقيقة نفسها دون ادعاء جديد",
       "hashtags": ["#وسم1", "#وسم2", "#وسم3", "#وسم4", "#وسم5"],
-      "search_keywords_en": "SHORT general-subject phrase in 2-3 simple English words ONLY (e.g. 'ancient egypt', 'deep ocean', 'human brain sleep'). Never a comma-separated list of synonyms (e.g. NEVER 'human sleep, prolonged sleep, hypersomnia') — this exact string is prefixed to every scene search below, so a long or repetitive value makes all scene searches look identical to the stock-video engine and return duplicate clips.",
-      "scene_keywords_en": ["10-14 English stock-footage search phrases, one per visual scene, in the exact order of the narration. Each phrase MUST name a concrete, filmable subject that is actually mentioned in that part of the script (a specific animal, place, object, body part, or activity) — never a vague abstract word like 'mystery', 'ancient', or 'nature' on its own, since stock sites match those to random unrelated footage. Start each phrase with the topic's general subject (e.g. 'ancient egypt', 'deep ocean', 'human brain') then add the specific visual detail."]
+      "search_keywords_en": "عبارة إنجليزية قصيرة من كلمتين إلى ثلاث عن الموضوع المحدد",
+      "scene_keywords_en": ["4 إلى 7 أوصاف إنجليزية قصيرة لمشاهد مرئية مرتبطة فعلًا بفقرات النص"]
     }
 
-    لا تكتب أي دعوة للمشاهد للإعجاب أو المشاركة أو الاشتراك، ولا تضف عبارة ختامية تفاعلية داخل narration_script؛ سيُلحق البرنامج بعده العبارة الثابتة التي اختارها المستخدم.
+    قواعد الدقة:
+    - لا تضف أرقامًا أو قياسات أو دقة أو آلية سببية أو مقارنة أو أسماء جديدة ما لم
+      تذكرها verified_fact أو تدعمها صراحة صفحة من source_urls.
+    - لا تجعل السؤال الافتتاحي يوحي بادعاء أقوى من الحقيقة المسجلة. لا يلزم أن
+      يحتوي على رقم أو مقارنة أو مفاجأة مصطنعة؛ سؤال واضح وصادق أفضل من هوك مضلل.
+    - لا تضف معلومات عامة عن الموضوع لمجرد إكمال عدد الكلمات. وسّع الشرح بعبارات
+      واضحة ومترابطة حول الحقيقة نفسها فقط، واحذف أي جملة لا يمكن ردّها إلى دليل.
+    - اكتب العربية الفصحى السليمة. شكّل hook_text وnarration_script تشكيلًا كاملًا
+      صحيحًا قدر الإمكان لتوجيه النطق، ولا تستخدم العامية أو ألفاظًا مخترعة.
+    - يبدأ narration_script بنص hook_text نفسه، وينتهي بعد اكتمال الشرح؛ لا تضف
+      طلب إعجاب أو مشاركة أو اشتراك، فالبرنامج يضيف العبارة الختامية الثابتة.
+    - التزم بمدى الكلمات المطلوب في رسالة المستخدم، وبعدد المشاهد المطلوب فيها.
+    - اجعل كلمات البحث والمشاهد الإنجليزية تصف الشيء المذكور فعلًا في الموضوع أو
+      النص، ولا تستخدم كلمات عامة أو لقطات لا علاقة لها به.
 
-    تعليمات إلزامية بخصوص الهوك (لا تتجاهلها إطلاقاً — هذا أهم جزء في الفيديو كله؛
-    فحتى الآن الهوكات المُنتَجة ضعيفة ولا تمنع المشاهد من الاستمرار في التمرير، وهذا
-    يعني فشل الفيديو بالكامل بصرف النظر عن جودة بقية المحتوى):
-
-    - الحد الأقصى 12 كلمة فقط، وليس 15 — كلما قصُر الهوك وارتفعت كثافته المعلوماتية
-      زاد أثره. لا تستخدم أي كلمة زائدة لا تخدم الصدمة أو الفضول مباشرة.
-    - يُمنع منعاً باتاً البدء بصيغة "هل تعلم" أو "هل تعلم أن" أو أي صيغة مشابهة —
-      هذه الصيغة مستهلكة تماماً وأصبحت إشارة للمشاهد لتجاوز الفيديو فوراً.
-    - يُمنع أن يكون الهوك سؤالاً عاماً أو مجرداً بلا تفصيل ملموس. يجب أن يحتوي
-      الهوك نفسه (وليس الشرح اللاحق) على تفصيل واحد محدد وملموس داخل صياغته:
-      رقم دقيق، اسم علم (كائن/مكان/شخصية)، أو مقارنة صادمة بين طرفين. مثال على
-      هوك مرفوض لأنه فضفاض: "هل تعلم شيئاً غريباً عن المحيطات؟". مثال على بنية
-      مقبولة (بنية التناقض): صياغة تضع المتوقع منطقياً مقابل الحقيقة الفعلية
-      المعاكسة تماماً في الجملة نفسها، بحيث يشعر القارئ أن هناك خطأً منطقياً
-      أمامه يجب حله فوراً — لا أن يُترك الأمر لشرح لاحق في السكريبت.
-    - اجعل الهوك يفتح "فجوة معرفية" (Curiosity Gap) حقيقية: صغ السؤال بحيث تكون
-      الإجابة المتوقَّعة من القارئ نفسه خاطئة تماماً، فيضطر لمشاهدة بقية الفيديو
-      لتصحيح افتراضه، لا لمجرد إشباع فضول عام.
-    - قبل تثبيت الهوك النهائي، طبّق اختبار "الثانية الثالثة" بصرامة: اقرأ الهوك
-      وحده بمعزل عن باقي السكريبت، واسأل: "هل هذه الصياغة بالذات تجعل شخصاً
-      يتوقف فوراً عن التمرير، أم يمكن تخمين اتجاه الإجابة من صياغة السؤال نفسه؟"
-      إذا كانت الإجابة متوقَّعة، أو الهوك يشبه في بنيته أي هوك مستهلك شائع، أعد
-      الصياغة بالكامل من زاوية أكثر غرابة وتحديداً قبل تسليم الإجابة النهائية —
-      لا تُسلّم أول صياغة تخطر ببالك.
-    - تجنّب كل الصيغ الجاهزة المكرورة ("هل تعلم"، "لن تصدق"، "الأمر الذي لا
-      يعرفه أحد") — اكتب الهوك دائماً كسؤال استفهامي طبيعي فيه تفصيل حقيقي
-      ومحدد يخصّ موضوع هذا الفيديو تحديداً، لا صياغة عامة تصلح لأي موضوع آخر.
-
-    تعليمات إلزامية بخصوص تنويع الفئة (لا تتجاهلها):
-    - اختر قيمة category أولاً، قبل التفكير في الموضوع نفسه، وتأكد أنها ليست من
-      الفئات الممنوعة المذكورة في رسالة المستخدم (آخر الفئات المستخدمة).
-    - يُمنع أن تتكرر نفس الفئة في فيديوهين أو ثلاثة متتالية؛ إذا كانت "أسرار الفضاء
-      والمحيطات" أو "حقائق علمية صادمة" ضمن الفئات الممنوعة الآن، فاختر فئة مختلفة
-      تماماً حتى لو كانت أصعب أو أقل شيوعاً — الهدف تنويع حقيقي وليس تكراراً بصياغة مختلفة.
-
-    تعليمات إلزامية بخصوص المشاهد المرئية (لا تتجاهلها):
-    - كل عبارة في scene_keywords_en يجب أن تصف شيئاً مرئياً حقيقياً ومحدداً مذكوراً
-      فعلياً في نفس جزء النص الذي تقابله (حيوان بعينه، مكان بعينه، عضو من الجسم، أداة،
-      أو نشاط بعينه) — وليس كلمة عامة مجردة مثل "mystery" أو "ancient" أو "nature"
-      بمفردها، لأن هذه الكلمات تُرجع في مواقع الفيديو مقاطع عشوائية لا علاقة حقيقية
-      لها بموضوع الفيديو.
-    - لأي كائن حي أو شيء له اسم إنجليزي شائع ومعروف عالمياً وليس مجرد ترجمة حرفية
-      للاسم العربي، استخدم ذلك الاسم الشائع نفسه حرفياً في search_keywords_en
-      وscene_keywords_en، لأن مواقع الفيديو مفهرسة بالاسم الشائع الذي يستخدمه الناس
-      فعلياً في البحث، لا بالترجمة الحرفية أو العلمية. مثال حقيقي حدث فعلاً: موضوع عن
-      "السمندل المكسيكي" كُتب بالإنجليزية "mexican salamander" فلم يُرجع أي نتيجة بحث
-      حقيقية للكائن نفسه لأن هذا المصطلح نادر الاستخدام في الفهرسة، بينما الاسم
-      الشائع والصحيح لنفس الكائن هو "axolotl" وهو ما كان يجب استخدامه. قبل كتابة أي
-      عبارة بحث لكائن أو شيء بعينه، اسأل نفسك: "هل هذه بالضبط الكلمة التي يكتبها شخص
-      عادي في محرك بحث فيديو ليجد هذا الكائن تحديداً؟" — إن لم تكن متأكداً من الاسم
-      الشائع الدقيق بالإنجليزية، استخدم الاسم العلمي الأكثر شيوعاً أو الفئة الأعم
-      المعروفة (مثل "amphibian" بدل اسم نادر غير مؤكد) بدلاً من المخاطرة بترجمة حرفية
-      قد لا يفهمها محرك البحث إطلاقاً.
-    - ابدأ كل عبارة بالمجال العام للموضوع (مثل "ancient egypt" أو "deep ocean" أو
-      "human brain") ثم أضف التفصيل البصري المحدد بعده، حتى يسهل العثور على مقطع
-      فيديو حقيقي يطابق الموضوع فعلياً بدلاً من مقطع عام غير مرتبط.
-    - حقل search_keywords_en يجب أن يكون عبارة قصيرة واحدة من كلمتين إلى ثلاث
-      كلمات بسيطة فقط (مثل "human brain sleep")، وليس قائمة مرادفات مفصولة
-      بفواصل (مثال مرفوض تماماً: "human sleep, prolonged sleep, hypersomnia").
-      هذه العبارة تُضاف تلقائياً في بداية كل استعلام بحث لكل مشهد، فإذا كانت
-      طويلة أو متكررة الكلمات فسيبدو كل استعلام مشهد مطابقاً تقريباً لباقي
-      الاستعلامات في نظر محرك بحث الفيديو، فيرجع نفس المقاطع لمشاهد مختلفة
-      بدل مقاطع متنوعة.
-
-    تعليمات إلزامية بخصوص الطول (لا تتجاهلها):
-    - حقل narration_script (شاملاً hook_text في بدايته) يجب أن يحتوي من أول استجابة على 120-165 كلمة عربية؛ لا تكتب نصاً أقصر من 120 كلمة.
-    - scene_keywords_en إلزامي ويجب أن يحتوي على 10-14 عبارات مطابقة للشروط أعلاه.
-    - عدّ الكلمات فعلياً قبل إنهاء الإجابة، ولا تُسلّم نصاً أطول أو أقصر من المطلوب.
-
-    تعليمات إلزامية بخصوص اللغة والتشكيل (لا تتجاهلها):
-    - اكتب narration_script وhook_text وtitle وcaption بالعربية الفصحى السليمة
-      حصراً، بلا أي كلمة أو تركيب عامي (مصري أو غيره)، حتى تُقرأ الجملة بشكل
-      منضبط وواضح بصوت التعليق ويفهمها كل الجمهور العربي على اختلاف لهجاته.
-    - استخدم تشكيلاً كاملاً (Full Tashkeel) على كل حرف من حروف narration_script
-      وhook_text بلا استثناء — كل حركة (فتحة/ضمة/كسرة/سكون) وكل شدة، شاملاً
-      أواخر الكلمات إعرابياً، تماماً كما تُكتب النصوص المُشكَّلة بالكامل. هذا
-      تغيير عن أي تعليمات سابقة كانت تطلب تشكيلاً جزئياً فقط — التشكيل الجزئي
-      لم يعد مقبولاً، لأن الاعتماد على "الكلمات الواضحة" ترك كلمات كثيرة
-      تُنطق غلطاً فعلياً في الإنتاج. لا داعي للقلق من ازدحام الترجمة الظاهرة
-      على الشاشة بصرياً بسبب هذا التشكيل — التشكيل يُحذف تلقائياً من الترجمة
-      المعروضة في مرحلة لاحقة من خط الإنتاج ولا يظهر للمشاهد إطلاقاً، ويُستخدم
-      فقط لضبط نطق صوت التعليق.
-    - طبّق قواعد الإعراب والصرف الفصيحة الصحيحة بدقة عند وضع كل حركة (حالة
-      الفعل: مرفوع/منصوب/مجزوم، وحالة الاسم: مرفوع/منصوب/مجروم، وصيغة الأمر
-      والمضارع، وتوافق الضمائر). التشكيل الخاطئ نحوياً أسوأ من عدم وجود تشكيل
-      إطلاقاً لأنه يفرض نطقاً غلطاً محدداً بدل ترك محرك النطق يخمّن.
-    - لا تبنِ النص على فرضية مختلقة أو على مصطلح غير موجود. قبل كتابة أي ادعاء
-      فلكي أو طبي أو تاريخي، تحقّق من علاقته السببية: لا تنسب إلى القمر انفجارًا
-      أو مجالًا مغناطيسيًا يستخلص الطاقة أو "هزات رقمية" أو تأثيرًا جويًا بلا دليل.
-      إذا كان السؤال الافتتاحي مبنيًا على معلومة خاطئة، صحح الفرضية صراحةً واختر
-      تفسيرًا علميًا معروفًا، ولا تملأ الفراغ بآلية تبدو علمية وهي مختلقة.
-    - انتبه بشكل خاص لهذه المواضع اللي أثبتت التجربة الفعلية أنها الأكثر عرضة
-      للنطق الخاطئ:
-        • الضمائر المتصلة بآخر الفعل أو الاسم (ـكَ، ـهُ، ـهَا، ـكُمْ...) —
-          الضمير نفسه يجب أن يحمل حركته الخاصة دائماً، منفصلة عن حركة الحرف
-          الذي قبله؛ اكتب الحركتين كلتيهما ولا تكتفِ بحركة واحدة على الفعل
-          وتترك الضمير عارياً (هذا أخطر غلط تكرر فعلياً في الإنتاج).
-        • أي كلمة تتشابه رسماً مع كلمة أخرى مختلفة تماماً في المعنى والنطق
-          (مثال: "زر" بمعنى الزرّ/الضغطة، والتي قد تُقرأ خطأً كفعل أمر من
-          "زار" بدون تشكيل).
-        • صيغة الأمر والمضارع المجزوم للأفعال التي قد تُقرأ بأكثر من صيغة
-          (مثل "اشترك" في الأمر، أو "لا تَنْسَ" في النهي).
-        • أي كلمة قصيرة شائعة ليس لها نطق افتراضي واضح بلا تشكيل (مثل "جرس"
-          التي تُقرأ خطأً في الإنتاج الفعلي بدون تشكيل — والصواب "جَرَس").
+    تذكير: لا تغيّر الموضوع أو الحقيقة أو الفئة أو العنوان. إذا لم تسمح الأدلة
+    بنص مثير، فاكتب نصًا بسيطًا صحيحًا ولا تخترع الإثارة.
     """
 ).strip()
 
@@ -769,24 +674,27 @@ PROOFREAD_SYSTEM_PROMPT = textwrap.dedent(
     المنطق العلمي والتاريخي داخل النص.
 
     قواعد لا يجوز خرقها:
+    إذا احتوى مدخل المستخدم على canonical_subject وverified_fact فهما مرجعان ثابتان:
+    لا تغيّر الموضوع أو الحقيقة، ولا تستبدلهما بظاهرة أخرى؛ اقتصر على إصلاح اللغة
+    والتشكيل وحذف الادعاء غير المدعوم، وسيحسم فحص الأدلة النهائي صلاحية النص.
     1) اكتب عربية فصحى سليمة فقط؛ ممنوع العامية، التراكيب المترجمة حرفياً،
        الكلمات الوهمية، أو الجمل التي لا معنى لها.
-    2) لا تخترع مصطلحاً أو وحدة قياس أو آلية فيزيائية. إذا كان افتراض الموضوع
-       خاطئاً، صححه بوضوح داخل السرد: اشرح الظاهرة الصحيحة أو قل إن الوصف
-       المتداول غير دقيق، ولا تحاول تبريره علمياً.
+    2) لا تخترع مصطلحاً أو وحدة قياس أو آلية فيزيائية أو معلومة جديدة. إذا كان
+       ادعاء في المسودة لا يطابق verified_fact، احذفه أو صححه دون تغيير الموضوع
+       ودون إدخال حقيقة بديلة من الذاكرة.
        تنبيه حاسم: عبارات مثل «البركان الثلجي» و«وحدة السيلينس» و«الشهرات
        الجوية» و«الماء المحتل بالدقيق» ليست مصطلحات علمية مقبولة في هذا النص؛
        احذفها تماماً ولا تعِد تسميتها أو شرحها. استبدل الفكرة بجملة صريحة مثل:
        «هذا الوصف المتداول غير دقيق؛ فالبركان لا يصنع الثلج من دون ماء، وقد
-       تتكون بلورات جليدية في العمود البركاني بسبب رطوبة الجو». إذا لم يمكن
-       تصحيح الفكرة بأمان، ارفضها واكتب شرحاً موثقاً لظاهرة أخرى.
+       تتكون بلورات جليدية في العمود البركاني بسبب رطوبة الجو». لا تنقل هذا المثال
+       إلى النص إلا إذا كان موضوع البنك هو البراكين وكانت مصادره تدعمه.
     3) صحح التطابق والإعراب والضمائر وعلامات الترقيم، واجعل كل جملة قابلة
        للفهم عند قراءتها منفردة. احذف الحشو والتكرار.
-    4) لا تضف أرقاماً أو أسماء أو نتائج إلا إذا كانت لازمة ومعلومة موثوقة؛
-       عند الشك استخدم صياغة تحفظية مثل "تُشير التقارير" أو احذف التفصيل.
-    5) حافظ على سؤال البداية وفكرة الموضوع ما لم تكن الفكرة نفسها خاطئة؛ عند
-       خطأ الفكرة، استبدلها بتصحيح علمي جذاب لا بمعلومة مختلقة. اترك النص ينتهي
-       بعد اكتمال الشرح، ولا تضف أي خاتمة تفاعلية أو دعوة للإعجاب أو المشاركة.
+    4) لا تضف أرقاماً أو أسماء أو نتائج إلا إذا ذكرها verified_fact أو دعمتها
+       صراحةً مصادر الموضوع؛ عند الشك احذف التفصيل.
+    5) حافظ على سؤال البداية وموضوع البنك ومعناه. صحح الصياغة فقط، ولا تستبدل
+       الموضوع أو الحقيقة بظاهرة أخرى. اترك النص ينتهي بعد اكتمال الشرح، ولا تضف
+       أي خاتمة تفاعلية أو دعوة للإعجاب أو المشاركة.
     6) ضع التشكيل الكامل المناسب للنطق، لكن لا تجعل التشكيل يغطي خطأً لغوياً؛
        صحة الكلمات والمعنى أولاً.
     7) إذا وُجد مفتاح issues_to_fix في الرسالة فأصلح كل مشكلة مذكورة فيه صراحةً:
@@ -832,12 +740,22 @@ def find_content_red_flag(text: str) -> str | None:
 
 
 
-def proofread_narration_tashkeel(script: str, issues: list[str] | None = None) -> str:
+def proofread_narration_tashkeel(
+    script: str,
+    issues: list[str] | None = None,
+    *,
+    canonical_subject: str | None = None,
+    verified_fact: str | None = None,
+) -> str:
     """Mandatory editorial gate: grammar, meaning, factual plausibility, and tashkeel."""
     def _call() -> str:
         payload: dict[str, Any] = {"text": script}
         if issues:
             payload["issues_to_fix"] = issues
+        if canonical_subject:
+            payload["canonical_subject"] = canonical_subject
+        if verified_fact:
+            payload["verified_fact"] = verified_fact
         messages = [
             {"role": "system", "content": PROOFREAD_SYSTEM_PROMPT},
             {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
@@ -874,10 +792,13 @@ def proofread_narration_tashkeel(script: str, issues: list[str] | None = None) -
 # it reaches a safe target length, before the CTA outro is appended on top.
 EXPAND_SYSTEM_PROMPT = textwrap.dedent(
     """
-    أنت كاتب سكريبتات محترف بالعربية الفصحى المشكَّلة تشكيلاً كاملاً. سيصلك نص
-    سردي قصير جاء أقصر من الطول المطلوب، ومهمتك فقط إطالته عن طريق إضافة جملة
-    أو جملتين إضافيتين، بنفس الأسلوب والموضوع، تحتويان على تفاصيل حقيقية
-    وموثوقة إضافية تخدم نفس الفكرة.
+    أنت محرر نصوص بالعربية الفصحى المشكَّلة. سيصلك نص قصير وverified_fact ثابت
+    من سجل موضوعات مُراجع. أضف جملة أو جملتين فقط لتوضيح الحقيقة نفسها بأسلوب
+    مترابط، ولا تضف أي معلومة جديدة أو تفصيلاً من ذاكرتك.
+
+    إذا لم تسمح verified_fact وحدها بإضافة جملة صحيحة دون تكرار أو حشو، فأعد
+    النص الأصلي كما هو؛ لا تخترع مادة لمجرد بلوغ العدد المطلوب. يمكن للمستخدم
+    تمرير source_urls كمراجع، لكنها لا تبيح أي ادعاء لا يطابق الحقيقة المسجلة.
 
     ممنوع منعاً باتاً: حذف أي كلمة من النص الأصلي، أو إعادة صياغة أي جملة
     موجودة بالفعل، أو تكرار معلومة وردت فيه، أو تغيير سؤال الافتتاح (أول
@@ -895,7 +816,13 @@ EXPAND_SYSTEM_PROMPT = textwrap.dedent(
 ).strip()
 
 
-def expand_narration_script(script: str, target_min_words: int) -> str:
+def expand_narration_script(
+    script: str,
+    target_min_words: int,
+    *,
+    verified_fact: str = "",
+    source_urls: list[str] | None = None,
+) -> str:
     """Best-effort: ask Groq to ADD 1-2 sentences to `script` (never remove
     or reword existing ones) until it clears target_min_words words.
 
@@ -913,6 +840,8 @@ def expand_narration_script(script: str, target_min_words: int) -> str:
             {"role": "user", "content": json.dumps(
                 {
                     "text": script,
+                    "verified_fact": verified_fact,
+                    "source_urls": source_urls or [],
                     "current_word_count": len(script.split()),
                     "target_minimum_word_count": target_min_words,
                 },
@@ -957,8 +886,37 @@ def expand_narration_script(script: str, target_min_words: int) -> str:
     return expanded
 
 
+def build_topic_user_prompt(seed: dict[str, Any], accessible_sources: list[dict[str, str]]) -> str:
+    """Give Groq one fixed bank topic and only citations already fetched successfully."""
+    source_urls = [str(source.get("url", "")).strip() for source in accessible_sources]
+    source_urls = [url for url in source_urls if url]
+    if not source_urls:
+        raise PipelineError("Cannot write a topic without at least one preflighted source")
+
+    pre_outro_min = MIN_SCRIPT_WORDS - OUTRO_MIN_WORDS
+    pre_outro_max = MAX_SCRIPT_WORDS - OUTRO_MAX_WORDS
+    bank_entry = {
+        "bank_id": seed["id"],
+        "category": seed["category"],
+        "subject": seed["subject"],
+        "angle": seed["angle"],
+        "verified_fact": seed["verified_fact"],
+        "source_urls": source_urls,
+    }
+    return (
+        "اكتب نص الفيديو فقط للمدخل الجاهز التالي من بنك الموضوعات. الموضوع والفئة "
+        "والعنوان محددة مسبقًا ولا يجوز تغييرها أو اقتراح موضوع بديل. استخدم angle "
+        "كتلميح أسلوبي اختياري فقط؛ لا تضف مقارنة أو رقمًا أو تفصيلًا لا يسنده verified_fact "
+        "أو مصدر متاح. يجب أن يبقى كل ادعاء في السؤال والنص والكابشن ضمن الدليل المرفق.\n\n"
+        + json.dumps(bank_entry, ensure_ascii=False)
+        + f"\n\nاكتب narration_script بين {pre_outro_min} و{pre_outro_max} كلمة قبل العبارة الختامية الثابتة. "
+        "ابدأه بـ hook_text نفسه. أعد category وtitle كما هما تمامًا من المدخل، "
+        "واجعل scene_keywords_en بين 4 و7 عبارات مرتبطة بصريًا بالنص. أخرج JSON فقط."
+    )
+
+
 def generate_topic() -> tuple[Topic, list[dict[str, str]], list[dict[str, str]]]:
-    log.info("Generating viral topic via Groq (%s)...", GROQ_MODEL)
+    log.info("Writing script for a pre-vetted topic-bank entry via Groq (%s)...", GROQ_MODEL)
     prefetched_sources: list[dict[str, str]] = []
     preflight_source_errors: list[dict[str, str]] = []
     excluded_source_signatures: set[tuple[str, ...]] = set()
@@ -968,7 +926,7 @@ def generate_topic() -> tuple[Topic, list[dict[str, str]], list[dict[str, str]]]
         topic = Topic(
             hook_text=parsed["hook_text"].strip(),
             narration_script=parsed.get("narration_script", "").strip(),
-            title=parsed["title"].strip(),
+            title=str(parsed.get("title", "")).strip(),
             caption=parsed.get("caption", "").strip(),
             hashtags=list(parsed.get("hashtags", [])),
             search_keywords_en=parsed.get("search_keywords_en", "nature abstract").strip(),
@@ -979,8 +937,8 @@ def generate_topic() -> tuple[Topic, list[dict[str, str]], list[dict[str, str]]]
             raise PipelineError("Groq returned an empty hook_text")
 
         # The prompt *asks* the model to open narration_script with
-        # hook_text verbatim, but nothing enforced that — at temperature=0.9
-        # the model frequently drifts: rewords it, drops it, or (observed in
+        # hook_text verbatim, but nothing enforced that — the model sometimes
+        # drifts: rewords it, drops it, or (observed in
         # production) leaves it dangling at the END as the "closing
         # interactive question" instead of the opening hook. Don't trust the
         # model's placement at all: unconditionally strip any near-duplicate
@@ -994,11 +952,9 @@ def generate_topic() -> tuple[Topic, list[dict[str, str]], list[dict[str, str]]]
 
     def _call() -> Topic:
         history = load_topic_history()
-        # Last 5 categories actually used
-        # (see TOPIC_CATEGORIES / remember_topic
-        # below) — sent to the model so it's forced to rotate domains instead
-        # of defaulting to whichever category is easiest (usually space/science),
-        # which is what caused the low topic-variety Ahmed flagged.
+        # Topic and category rotation happen here in code against the reviewed
+        # bank. Groq receives exactly one selected entry and cannot choose a
+        # different subject or category.
         recent_categories = [h.get("category", "") for h in history[-5:] if h.get("category")]
         nonlocal prefetched_sources, preflight_source_errors
         seed, prefetched_sources, preflight_source_errors = choose_reachable_topic_seed(
@@ -1006,33 +962,15 @@ def generate_topic() -> tuple[Topic, list[dict[str, str]], list[dict[str, str]]]
             set(recent_categories[-2:]),
             excluded_source_signatures,
         )
-        user_msg = (
-            "أعطني فكرة فيديو جديدة بصيغة JSON كما هو محدد. "
-            f"يجب أن يكون narration_script قبل عبارة الإغلاق الثابتة بين "
-            f"{MIN_SCRIPT_WORDS - OUTRO_MIN_WORDS} و{MAX_SCRIPT_WORDS - OUTRO_MAX_WORDS} كلمة، "
-            "ويجب أن يحتوي scene_keywords_en على 4 إلى 7 مشاهد مرتبطة مباشرة بفقرات النص. "
-            "لا تكرر أياً من الموضوعات السابقة التالية: "
-            + json.dumps([x.get("title", "") for x in history[-40:]], ensure_ascii=False)
-            + ". آخر الفئات (category) المستخدمة بالترتيب — ممنوع اختيار أي منها الآن، اختر فئة مختلفة تماماً: "
-            + json.dumps(recent_categories, ensure_ascii=False)
-            + "\n\nالتزم بهذا المدخل الموثق ولا تخترع موضوعًا آخر: "
-            + json.dumps({
-                "bank_id": seed["id"],
-                "category": seed["category"],
-                "subject": seed["subject"],
-                "angle": seed["angle"],
-                "verified_fact": seed["verified_fact"],
-                "source_urls": seed["source_urls"],
-            }, ensure_ascii=False)
-            + "\nاذكر الحقيقة المدعومة بالمصدر فقط، وميّز أي حدود للمعرفة بوضوح."
-            + "\nيجب أن يستند كل من hook_text وtitle وcaption والنص المنطوق مباشرةً إلى verified_fact ومصدره. لا تضف مقارنة يومية أو رقماً أو تشبيهاً غير مدعوم صراحةً بالحقيقة؛ إذا كانت الزاوية لا تسند المقارنة، اختر صياغة أخرى مرتبطة بالحقيقة نفسها."
-        )
+        user_msg = build_topic_user_prompt(seed, prefetched_sources)
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": user_msg},
         ]
-        raw_text = _groq_chat(messages)
+        raw_text = _groq_chat(messages, temperature=0.35)
         topic, word_count = _parse_topic(raw_text)
+        set_canonical_topic_title(topic, seed)
+        log.info("Using vetted topic-bank subject as the video title: %s", topic.title)
         topic.bank_id = str(seed["id"])
         topic.verified_fact = str(seed["verified_fact"])
         topic.source_urls = [str(x) for x in seed.get("source_urls", [])]
@@ -1070,7 +1008,12 @@ def generate_topic() -> tuple[Topic, list[dict[str, str]], list[dict[str, str]]]
                 "expand it instead of relying on the outro alone",
                 word_count, pre_outro_min + 5,
             )
-            topic.narration_script = expand_narration_script(topic.narration_script, pre_outro_min + 5)
+            topic.narration_script = expand_narration_script(
+                topic.narration_script,
+                pre_outro_min + 5,
+                verified_fact=topic.verified_fact,
+                source_urls=[source["url"] for source in prefetched_sources],
+            )
             word_count = len(topic.narration_script.split())
 
         # Account for the fixed closing phrase in the final video duration,
@@ -2239,10 +2182,19 @@ def run_pipeline() -> None:
     # a caught diacritic mistake is never actually spoken. topic.json below
     # is written with the already-proofread script, so the saved record
     # always matches exactly what generate_tts receives.
-    topic.narration_script = proofread_narration_tashkeel(topic.narration_script)
+    topic.narration_script = proofread_narration_tashkeel(
+        topic.narration_script,
+        canonical_subject=topic.title,
+        verified_fact=topic.verified_fact,
+    )
     topic.narration_script = enforce_text_quality(
         topic.narration_script,
-        reviser=lambda text, issues: proofread_narration_tashkeel(text, issues=issues),
+        reviser=lambda text, issues: proofread_narration_tashkeel(
+            text,
+            issues=issues,
+            canonical_subject=topic.title,
+            verified_fact=topic.verified_fact,
+        ),
     )
     # Proofreading is intentionally complete before appending the fixed CTA,
     # so no language model can rewrite, shorten, or remove the user's exact words.

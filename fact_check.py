@@ -14,6 +14,7 @@ import json
 import logging
 import os
 import re
+import time
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
@@ -29,8 +30,10 @@ GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
 GROQ_API_KEY = re.sub(r"\s+", "", os.getenv("GROQ_API_KEY", ""))
 MIN_CONFIDENCE = float(os.getenv("FACT_CHECK_MIN_CONFIDENCE", "0.85"))
 FETCH_TIMEOUT = float(os.getenv("FACT_CHECK_FETCH_TIMEOUT", "20"))
-MAX_SOURCE_CHARS = int(os.getenv("FACT_CHECK_MAX_SOURCE_CHARS", "24000"))
-MAX_TOTAL_SOURCE_CHARS = int(os.getenv("FACT_CHECK_MAX_TOTAL_SOURCE_CHARS", "50000"))
+MAX_SOURCE_CHARS = int(os.getenv("FACT_CHECK_MAX_SOURCE_CHARS", "6000"))
+MAX_TOTAL_SOURCE_CHARS = int(os.getenv("FACT_CHECK_MAX_TOTAL_SOURCE_CHARS", "8000"))
+GROQ_RATE_LIMIT_MAX_RETRIES = max(0, int(os.getenv("FACT_CHECK_GROQ_MAX_RETRIES", "4")))
+FACT_CHECK_MAX_COMPLETION_TOKENS = max(256, int(os.getenv("FACT_CHECK_MAX_COMPLETION_TOKENS", "900")))
 USER_AGENT = "auto-publish1-fact-check/1.0 (+https://github.com/ahmedalsharqwi2-gif/auto-publish1)"
 _SOURCE_CACHE: dict[tuple[str, tuple[str, ...]], dict[str, str]] = {}
 
@@ -90,10 +93,24 @@ def _allowed_url(url: str, domains: list[str]) -> bool:
     return any(host == domain or host.endswith("." + domain) for domain in domains)
 
 
+def _is_specific_source_url(url: str) -> bool:
+    """Reject broad section indexes; evidence links must identify a content page."""
+    path = urlparse(url).path.rstrip("/").lower()
+    if not path:
+        return False
+    last_segment = path.rsplit("/", 1)[-1]
+    return last_segment not in {
+        "facts", "topics", "resources", "articles", "news", "science",
+        "education", "about", "home", "index", "index.html", "index.php",
+    }
+
+
 def fetch_source(url: str, allowed_domains: list[str]) -> dict[str, str]:
     url = _clean_url(url)
     if not _allowed_url(url, allowed_domains):
         raise FactCheckError(f"Source domain is not allow-listed: {url}")
+    if not _is_specific_source_url(url):
+        raise FactCheckError(f"Source URL is a generic index/listing, not a specific evidence page: {url}")
     cache_key = (url, tuple(sorted(set(allowed_domains))))
     if cache_key in _SOURCE_CACHE:
         return dict(_SOURCE_CACHE[cache_key])
@@ -152,26 +169,68 @@ def _json_from_model(text: str) -> dict[str, Any]:
     return data
 
 
-def _groq_json(system: str, user: str) -> dict[str, Any]:
+def _groq_rate_limit_delay(response: requests.Response, attempt: int) -> float:
+    headers = getattr(response, "headers", {}) or {}
+    raw_retry_after = headers.get("Retry-After")
+    delay: float | None = None
+    if raw_retry_after is not None:
+        try:
+            delay = float(raw_retry_after)
+        except (TypeError, ValueError):
+            delay = None
+
+    if delay is None:
+        body = str(getattr(response, "text", ""))
+        match = re.search(
+            r"(?:please\s+)?try again in\s+([0-9]+(?:\.[0-9]+)?)\s*(?:s|sec(?:onds?)?)",
+            body,
+            re.IGNORECASE,
+        )
+        if match:
+            delay = float(match.group(1))
+
+    if delay is None:
+        delay = min(5.0 * (2 ** max(attempt - 1, 0)), 60.0)
+    # Add a small safety margin beyond the provider's stated reset time.
+    return min(max(delay, 0.0) + 1.0, 120.0)
+
+
+def _groq_json(system: str, user: str, max_tokens: int = FACT_CHECK_MAX_COMPLETION_TOKENS) -> dict[str, Any]:
     if not GROQ_API_KEY:
         raise FactCheckError("GROQ_API_KEY is missing; cannot run Fact Check")
-    response = requests.post(
-        GROQ_ENDPOINT,
-        headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
-        json={
-            "model": GROQ_MODEL,
-            "temperature": 0,
-            "max_tokens": 2400,
-            "response_format": {"type": "json_object"},
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-        },
-        timeout=60,
-    )
-    if response.status_code != 200:
-        raise FactCheckError(f"Groq Fact Check request failed ({response.status_code}): {response.text[:500]}")
+    payload = {
+        "model": GROQ_MODEL,
+        "temperature": 0,
+        "max_tokens": max_tokens,
+        "response_format": {"type": "json_object"},
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
+    }
+    for attempt in range(1, GROQ_RATE_LIMIT_MAX_RETRIES + 2):
+        response = requests.post(
+            GROQ_ENDPOINT,
+            headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
+            json=payload,
+            timeout=60,
+        )
+        if response.status_code == 429:
+            if attempt > GROQ_RATE_LIMIT_MAX_RETRIES:
+                raise FactCheckError(
+                    f"Groq Fact Check rate limit (429) persisted after {attempt - 1} retries: "
+                    f"{response.text[:500]}"
+                )
+            delay = _groq_rate_limit_delay(response, attempt)
+            log.warning(
+                "Groq Fact Check rate limit (429); waiting %.1fs before retry (%d/%d)",
+                delay, attempt, GROQ_RATE_LIMIT_MAX_RETRIES,
+            )
+            time.sleep(delay)
+            continue
+        if response.status_code != 200:
+            raise FactCheckError(f"Groq Fact Check request failed ({response.status_code}): {response.text[:500]}")
+        break
     try:
         content = response.json()["choices"][0]["message"]["content"]
     except (KeyError, IndexError, TypeError, json.JSONDecodeError) as exc:
@@ -184,8 +243,9 @@ def _extract_claims(script: str, verified_fact: str) -> list[dict[str, Any]]:
         """أنت مستخرج ادعاءات علمية فقط. لا تحكم على صحة النص ولا تضف معلومات من عندك.
 استخرج كل جملة قابلة للتحقق من العنوان والكابشن والنص المنطوق، خاصة الأرقام والعلاقات السببية والأسماء العلمية، ولا تستثن الادعاءات المكتوبة بأسلوب تشويقي.
 أعد JSON فقط بالشكل: {\"claims\":[{\"claim\":\"...\",\"importance\":\"core|supporting\",\"numeric\":true|false}]}.
-لا تعتبر الدعوة إلى المتابعة أو الأسلوب البلاغي ادعاءً علميًا.""",
+        لا تعتبر الدعوة إلى المتابعة أو الأسلوب البلاغي ادعاءً علميًا.""",
         json.dumps({"verified_fact": verified_fact, "script": script}, ensure_ascii=False),
+        max_tokens=700,
     )
     claims = result.get("claims", [])
     if not isinstance(claims, list) or not claims:
@@ -225,6 +285,7 @@ supported يتطلب دليلاً واضحًا في المصدر. contradicted �
             "claims": claims,
             "sources": evidence,
         }, ensure_ascii=False),
+        max_tokens=FACT_CHECK_MAX_COMPLETION_TOKENS,
     )
 
 
