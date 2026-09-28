@@ -54,9 +54,10 @@ MIN_AUDIO_SECONDS = float(os.getenv("MIN_AUDIO_SECONDS", "60"))
 MAX_AUDIO_SECONDS = float(os.getenv("MAX_AUDIO_SECONDS", "90"))
 TARGET_AUDIO_SECONDS = float(os.getenv("TARGET_AUDIO_SECONDS", str(max(1.0, MAX_AUDIO_SECONDS - 5.0))))
 MAX_SCRIPT_WORDS = int(os.getenv("MAX_SCRIPT_WORDS", "165"))
-MIN_SCRIPT_WORDS = int(os.getenv("MIN_SCRIPT_WORDS", "120"))
-
+MIN_SCRIPT_WORDS = int(os.getenv("MIN_SCRIPT_WORDS", "90"))
 REQUIRE_EXTERNAL_SOURCES = os.getenv("REQUIRE_EXTERNAL_SOURCES", "false").lower() == "true"
+EDITORIAL_REVIEW_ENABLED = os.getenv("EDITORIAL_REVIEW_ENABLED", "true").lower() == "true"
+FACT_CHECK_ENABLED = os.getenv("FACT_CHECK_ENABLED", "true").lower() == "true"
 TOPIC_GENERATION_MAX_ATTEMPTS = int(os.getenv("TOPIC_GENERATION_MAX_ATTEMPTS", "5"))
 HISTORY_LIMIT = int(os.getenv("HISTORY_LIMIT", "1000"))
 MIN_SCENE_CLIPS = int(os.getenv("MIN_SCENE_CLIPS", "10"))
@@ -1372,7 +1373,10 @@ def run_pipeline() -> None:
 
     topic, prefetched_sources, preflight_errors = generate_topic()
 
-    topic.narration_script = _proofread_topic_narration(topic, topic.narration_script)
+    if EDITORIAL_REVIEW_ENABLED:
+        topic.narration_script = _proofread_topic_narration(topic, topic.narration_script)
+    else:
+        log.info("Editorial LLM review disabled; using generated narration")
     topic.narration_script = _append_engagement_outro(topic.narration_script)
     final_word_count = len(topic.narration_script.split())
     _validate_final_script_word_count(final_word_count)
@@ -1380,19 +1384,31 @@ def run_pipeline() -> None:
     if red_flag:
         raise PipelineError(f"Rejected hallucinated content term: {red_flag}")
 
-    fact_report = fact_check_topic(
-        topic,
-        run_dir / "fact_check.json",
-        prefetched_sources=prefetched_sources,
-        preflight_source_errors=preflight_errors,
-    )
-    if fact_report.get("status") != "PASS":
-        raise PipelineError(
-            "Fact Check failed. Details: "
-            f"{fact_report.get('errors', [])}. "
-            f"Claim verdicts: {[c.get('verdict') for c in fact_report.get('claims', [])]}"
+    if FACT_CHECK_ENABLED:
+        fact_report = fact_check_topic(
+            topic,
+            run_dir / "fact_check.json",
+            prefetched_sources=prefetched_sources,
+            preflight_source_errors=preflight_errors,
         )
-    log.info("Fact Check passed: %d supported claims", len(fact_report.get("claims", [])))
+        if fact_report.get("status") != "PASS":
+            raise PipelineError(
+                "Fact Check failed. Details: "
+                f"{fact_report.get('errors', [])}. "
+                f"Claim verdicts: {[c.get('verdict') for c in fact_report.get('claims', [])]}"
+            )
+        log.info("Fact Check passed: %d supported claims", len(fact_report.get("claims", [])))
+    else:
+        fact_report = {
+            "status": "SKIPPED",
+            "reason": "FACT_CHECK_ENABLED=false; simple workflow mode",
+            "title": topic.title,
+            "errors": [],
+        }
+        (run_dir / "fact_check.json").write_text(
+            json.dumps(fact_report, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        log.warning("LLM Fact Check disabled; local red-flag and length checks remain active")
 
     (run_dir / "topic.json").write_text(
         json.dumps(topic.__dict__, ensure_ascii=False, indent=2), encoding="utf-8"

@@ -58,7 +58,7 @@ class CurrentTopicAndEditorialTests(unittest.TestCase):
 
     def test_short_editorial_rewrite_keeps_original_minimum_length_script(self):
         original = "حَقِيقَةٌ " * (MIN_SCRIPT_WORDS - OUTRO_MIN_WORDS)
-        shortened = "حَقِيقَةٌ " * 90
+        shortened = "حَقِيقَةٌ " * 60
         topic = Topic(
             hook_text="مَا هَذِهِ الحَقِيقَةُ؟",
             narration_script=original,
