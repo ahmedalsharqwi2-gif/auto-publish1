@@ -36,6 +36,31 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Check Gemini API key (fail fast)
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          if [ -z "$GEMINI_API_KEY" ]; then
+            echo "ERROR: the GEMINI_API_KEY secret is missing or empty"
+            exit 1
+          fi
+          KEY_CLEAN="$(printf '%s' "$GEMINI_API_KEY" | tr -d '[:space:]"'"'"'')"
+          case "$KEY_CLEAN" in
+            AQ.*)   echo "Key type: authorization key (AQ.)" ;;
+            AIza*)  echo "Key type: standard key (AIza)" ;;
+            *)      echo "WARNING: unrecognized key format (expected an AQ. or AIza prefix)" ;;
+          esac
+          CODE="$(curl -s -o /tmp/gemini_check.json -w '%{http_code}' \
+            -H "x-goog-api-key: $KEY_CLEAN" \
+            'https://generativelanguage.googleapis.com/v1beta/models?pageSize=1')"
+          echo "Gemini models endpoint HTTP status: $CODE"
+          if [ "$CODE" != "200" ]; then
+            head -c 500 /tmp/gemini_check.json
+            echo
+            echo "ERROR: Gemini rejected the key. Re-create the secret without spaces or quotes."
+            exit 1
+          fi
+
       - name: Install dependencies
         run: |
           sudo apt-get update
@@ -68,11 +93,15 @@ jobs:
 
       - name: Generate and publish
         env:
-          # --- LLM provider: Groq (primary, reliable) ---
-          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-          GROQ_MODEL: 'llama-3.3-70b-versatile'
+          # --- LLM provider: Gemini (primary) ---
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          # Check the exact model name in Google AI Studio; several names can be
+          # given separated by commas and they are tried in order.
+          GEMINI_MODEL: 'gemini-3.8-flash'
+          GEMINI_THINKING_LEVEL: 'low'
+          LLM_MAX_COMPLETION_TOKENS: '4000'
 
-          # --- LLM provider: OpenRouter (fallback only) ---
+          # --- LLM provider: OpenRouter (optional fallback only) ---
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           OPENROUTER_MODEL: 'google/gemma-4-26b-a4b-it:free,google/gemma-4-31b-it:free,nvidia/nemotron-3-super-120b-a12b:free'
           OPENROUTER_TITLE: 'Auto Publish Reels'
@@ -122,6 +151,7 @@ jobs:
 
         run: |
           test -f main.py || { echo "ERROR: main.py is missing"; exit 1; }
+          test -f llm_gemini.py || { echo "ERROR: llm_gemini.py is missing"; exit 1; }
           test -f tts_quality.py || { echo "ERROR: tts_quality.py is missing"; exit 1; }
           test -f assets/voices/voice_profiles.json || { echo "ERROR: voice profiles config is missing"; exit 1; }
           test -f fact_check.py || { echo "ERROR: fact_check.py is missing"; exit 1; }
