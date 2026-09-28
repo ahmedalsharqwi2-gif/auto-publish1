@@ -84,6 +84,7 @@ jobs:
           MAX_SCRIPT_WORDS: '165'
           MIN_SCENE_CLIPS: '4'
           TOPIC_HISTORY_FILE: 'topic_history.json'
+          TOPIC_BANK_FILE: 'config/topic_bank.json'
           TTS_ENGINE: 'silma'
           SILMA_REFERENCE_PROFILE: ${{ inputs.voice_profile || 'mohamed_elbed' }}
           SILMA_VOICE_PROFILES_FILE: 'assets/voices/voice_profiles.json'
@@ -100,6 +101,7 @@ jobs:
           test -f main.py || { echo "ERROR: main.py is missing"; exit 1; }
           test -f tts_quality.py || { echo "ERROR: tts_quality.py is missing"; exit 1; }
           test -f assets/voices/voice_profiles.json || { echo "ERROR: voice profiles config is missing"; exit 1; }
+          test -f config/topic_bank.json || { echo "ERROR: topic bank is missing"; exit 1; }
           python main.py
       - name: Persist topic history
         if: success()

@@ -75,6 +75,7 @@ log = logging.getLogger("pipeline")
 WORK_DIR = Path(os.getenv("WORK_DIR", "./work"))
 WORK_DIR.mkdir(parents=True, exist_ok=True)
 TOPIC_HISTORY_FILE = Path(os.getenv("TOPIC_HISTORY_FILE", "topic_history.json"))
+TOPIC_BANK_FILE = Path(os.getenv("TOPIC_BANK_FILE", "config/topic_bank.json"))
 DRY_RUN = os.getenv("DRY_RUN", "false").lower() == "true"
 DRY_RUN_INPUT_FILE = Path(os.getenv("DRY_RUN_INPUT_FILE", "tests/fixtures/bad_narration.txt"))
 MIN_AUDIO_SECONDS = float(os.getenv("MIN_AUDIO_SECONDS", "85"))
@@ -88,7 +89,7 @@ MAX_SCRIPT_WORDS = int(os.getenv("MAX_SCRIPT_WORDS", "165"))
 # tight enough that a single Groq rate limit (429) plus one short draft
 # could exhaust the whole budget before a good script ever came through.
 TOPIC_GENERATION_MAX_ATTEMPTS = int(os.getenv("TOPIC_GENERATION_MAX_ATTEMPTS", "5"))
-HISTORY_LIMIT = int(os.getenv("HISTORY_LIMIT", "200"))
+HISTORY_LIMIT = int(os.getenv("HISTORY_LIMIT", "1000"))
 MIN_SCENE_CLIPS = int(os.getenv("MIN_SCENE_CLIPS", "10"))
 
 def _clean_env(name: str) -> str | None:
@@ -249,6 +250,9 @@ class Topic:
     search_keywords_en: str = ""  # English keywords for Pexels search
     scene_keywords_en: list[str] = field(default_factory=list)
     category: str = ""       # one of TOPIC_CATEGORIES — used to force domain rotation
+    bank_id: str = ""        # selected entry from config/topic_bank.json
+    verified_fact: str = ""  # source-backed fact supplied to the generator
+    source_urls: list[str] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -466,6 +470,30 @@ def _topic_fingerprint(topic: Topic | dict[str, Any]) -> str:
     return re.sub(r"[^\w\u0600-\u06ff]+", " ", " ".join(map(str, values))).strip().lower()
 
 
+def load_topic_bank() -> list[dict[str, Any]]:
+    try:
+        data = json.loads(TOPIC_BANK_FILE.read_text(encoding="utf-8"))
+        topics = data.get("topics", []) if isinstance(data, dict) else []
+        if not isinstance(topics, list) or len(topics) < 730:
+            raise PipelineError(f"Topic bank must contain at least 730 entries: {TOPIC_BANK_FILE}")
+        return [x for x in topics if isinstance(x, dict) and x.get("id") and x.get("verified_fact")]
+    except (OSError, json.JSONDecodeError) as exc:
+        raise PipelineError(f"Could not load topic bank {TOPIC_BANK_FILE}: {exc}") from exc
+
+def choose_topic_seed(history: list[dict[str, Any]], blocked_categories: set[str] | None = None) -> dict[str, Any]:
+    bank = load_topic_bank()
+    used = {str(x.get("bank_id", "")) for x in history if x.get("bank_id")}
+    available = [x for x in bank if str(x.get("id")) not in used]
+    blocked = blocked_categories or set()
+    varied = [x for x in available if str(x.get("category", "")) not in blocked]
+    if varied:
+        available = varied
+    if not available:
+        raise PipelineError("All topic-bank entries have already been used; archive or reset topic_history.json")
+    # A random choice is safe here because the durable bank_id in history is the
+    # actual uniqueness guard; reruns never silently reuse a selected entry.
+    return random.SystemRandom().choice(available)
+
 def load_topic_history() -> list[dict[str, Any]]:
     try:
         data = json.loads(TOPIC_HISTORY_FILE.read_text(encoding="utf-8"))
@@ -492,6 +520,7 @@ def remember_topic(topic: Topic) -> None:
     history.append({"title": topic.title, "hook_text": topic.hook_text,
                     "search_keywords_en": topic.search_keywords_en,
                     "category": topic.category,
+                    "bank_id": topic.bank_id,
                     "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
     TOPIC_HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
     TOPIC_HISTORY_FILE.write_text(json.dumps(history[-HISTORY_LIMIT:], ensure_ascii=False, indent=2), encoding="utf-8")
@@ -964,11 +993,13 @@ def generate_topic() -> Topic:
 
     def _call() -> Topic:
         history = load_topic_history()
-        # Last 5 categories actually used (see TOPIC_CATEGORIES / remember_topic
+        # Last 5 categories actually used
+        # (see TOPIC_CATEGORIES / remember_topic
         # below) — sent to the model so it's forced to rotate domains instead
         # of defaulting to whichever category is easiest (usually space/science),
         # which is what caused the low topic-variety Ahmed flagged.
         recent_categories = [h.get("category", "") for h in history[-5:] if h.get("category")]
+        seed = choose_topic_seed(history, set(recent_categories[-2:]))
         user_msg = (
             "أعطني فكرة فيديو جديدة بصيغة JSON كما هو محدد. "
             f"يجب أن يكون narration_script بين {MIN_SCRIPT_WORDS} و{MAX_SCRIPT_WORDS} كلمة، "
@@ -977,6 +1008,16 @@ def generate_topic() -> Topic:
             + json.dumps([x.get("title", "") for x in history[-40:]], ensure_ascii=False)
             + ". آخر الفئات (category) المستخدمة بالترتيب — ممنوع اختيار أي منها الآن، اختر فئة مختلفة تماماً: "
             + json.dumps(recent_categories, ensure_ascii=False)
+            + "\n\nالتزم بهذا المدخل الموثق ولا تخترع موضوعًا آخر: "
+            + json.dumps({
+                "bank_id": seed["id"],
+                "category": seed["category"],
+                "subject": seed["subject"],
+                "angle": seed["angle"],
+                "verified_fact": seed["verified_fact"],
+                "source_urls": seed["source_urls"],
+            }, ensure_ascii=False)
+            + "\nاذكر الحقيقة المدعومة بالمصدر فقط، وميّز أي حدود للمعرفة بوضوح."
         )
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
@@ -984,6 +1025,10 @@ def generate_topic() -> Topic:
         ]
         raw_text = _groq_chat(messages)
         topic, word_count = _parse_topic(raw_text)
+        topic.bank_id = str(seed["id"])
+        topic.verified_fact = str(seed["verified_fact"])
+        topic.source_urls = [str(x) for x in seed.get("source_urls", [])]
+        topic.category = str(seed["category"])
 
         # MIN_SCRIPT_WORDS/MAX_SCRIPT_WORDS bound the FINAL script — Groq's
         # narration plus the fixed CTA outro appended below — since that
