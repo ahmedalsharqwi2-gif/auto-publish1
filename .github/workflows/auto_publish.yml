@@ -68,9 +68,12 @@ jobs:
 
       - name: Generate and publish
         env:
-          # OpenRouter with multi-model fallback list of free models
+          # OpenRouter with multi-model fallback list of CURRENTLY-AVAILABLE
+          # free models (verified September 2026).
+          # If all fail, check https://openrouter.ai/collections/free-models
+          # and update OPENROUTER_MODEL below.
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          OPENROUTER_MODEL: 'qwen/qwen-2.5-7b-instruct:free,mistralai/mistral-nemo:free,meta-llama/llama-3.2-3b-instruct:free,google/gemma-2-9b-it:free,microsoft/phi-3-mini-128k-instruct:free'
+          OPENROUTER_MODEL: 'google/gemma-4-26b-a4b-it:free,google/gemma-4-31b-it:free,inclusionai/ling-3.0-flash-sante:free,inclusionai/ling-3.0-flash-fin:free,nvidia/nemotron-3-super-120b-a12b:free,z-ai/glm-5.2:free,cohere/north-mini-code:free'
           OPENROUTER_TITLE: 'Auto Publish Reels'
 
           PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
@@ -93,7 +96,7 @@ jobs:
           TOPIC_BANK_FILE: 'config/topic_bank.json'
           FACT_CHECK_SOURCES_FILE: 'config/fact_sources.json'
 
-          FACT_CHECK_MODEL: 'qwen/qwen-2.5-7b-instruct:free,mistralai/mistral-nemo:free,meta-llama/llama-3.2-3b-instruct:free,google/gemma-2-9b-it:free'
+          FACT_CHECK_MODEL: 'google/gemma-4-26b-a4b-it:free,google/gemma-4-31b-it:free,inclusionai/ling-3.0-flash-sante:free,inclusionai/ling-3.0-flash-fin:free,nvidia/nemotron-3-super-120b-a12b:free,z-ai/glm-5.2:free,cohere/north-mini-code:free'
           FACT_CHECK_MIN_CONFIDENCE: '0.85'
           FACT_CHECK_MAX_SOURCE_CHARS: '6000'
           FACT_CHECK_MAX_TOTAL_SOURCE_CHARS: '8000'
