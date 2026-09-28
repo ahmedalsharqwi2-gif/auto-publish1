@@ -99,8 +99,7 @@ jobs:
         run: |
           test -f main.py || { echo "ERROR: main.py is missing"; exit 1; }
           test -f tts_quality.py || { echo "ERROR: tts_quality.py is missing"; exit 1; }
-          test -f assets/voice_reference_synthetic.wav || { echo "ERROR: reference WAV is missing; run Make SILMA reference voice first"; exit 1; }
-          test -f assets/voice_reference_synthetic.txt || { echo "ERROR: reference TXT is missing; run Make SILMA reference voice first"; exit 1; }
+          test -f assets/voices/voice_profiles.json || { echo "ERROR: voice profiles config is missing"; exit 1; }
           python main.py
       - name: Persist topic history
         if: always()
