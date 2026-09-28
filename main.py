@@ -79,6 +79,7 @@ TOPIC_HISTORY_FILE = Path(os.getenv("TOPIC_HISTORY_FILE", "topic_history.json"))
 TOPIC_BANK_FILE = Path(os.getenv("TOPIC_BANK_FILE", "config/topic_bank.json"))
 DRY_RUN = os.getenv("DRY_RUN", "false").lower() == "true"
 DRY_RUN_INPUT_FILE = Path(os.getenv("DRY_RUN_INPUT_FILE", "tests/fixtures/bad_narration.txt"))
+MIN_AUDIO_SECONDS = float(os.getenv("MIN_AUDIO_SECONDS", "60"))
 MAX_AUDIO_SECONDS = float(os.getenv("MAX_AUDIO_SECONDS", "90"))
 TARGET_AUDIO_SECONDS = float(os.getenv("TARGET_AUDIO_SECONDS", str(max(1.0, MAX_AUDIO_SECONDS - 1.0))))
 MAX_SCRIPT_WORDS = int(os.getenv("MAX_SCRIPT_WORDS", "165"))
@@ -150,6 +151,7 @@ SILMA_MIN_SCORE = float(os.getenv("SILMA_MIN_SCORE", "0.6"))
 SILMA_SPEED = float(os.getenv("SILMA_SPEED", "1.0"))
 SILMA_GUARD_ENABLED = os.getenv("SILMA_GUARD_ENABLED", "true").lower() == "true"
 SILMA_GUARD_MIN_MATCH_WORDS = int(os.getenv("SILMA_GUARD_MIN_MATCH_WORDS", "2"))
+VOICE_ROTATION_ENABLED = os.getenv("VOICE_ROTATION_ENABLED", "true").lower() == "true"
 
 GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
 GROQ_MAX_COMPLETION_TOKENS = int(os.getenv("GROQ_MAX_COMPLETION_TOKENS", "2200"))
@@ -253,6 +255,7 @@ class Topic:
     bank_id: str = ""        # selected entry from config/topic_bank.json
     verified_fact: str = ""  # source-backed fact supplied to the generator
     source_urls: list[str] = field(default_factory=list)
+    voice_profile: str = ""  # selected deterministically for this video run
 
 
 def set_canonical_topic_title(topic: Topic, seed: dict[str, Any]) -> None:
@@ -500,6 +503,51 @@ def load_topic_history() -> list[dict[str, Any]]:
         return []
 
 
+def load_voice_profile_ids(path: Path | None = None) -> tuple[list[str], str]:
+    """Load the configured voice order and default without trusting model output."""
+    path = path or SILMA_VOICE_PROFILES_FILE
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        profiles = data.get("profiles", {}) if isinstance(data, dict) else {}
+        if not isinstance(profiles, dict):
+            raise ValueError("profiles must be an object")
+        ids = [str(profile_id) for profile_id in profiles if str(profile_id).strip()]
+        if not ids:
+            raise ValueError("no voice profiles configured")
+        default = str(data.get("default", ids[0]))
+        if default not in ids:
+            default = ids[0]
+        return ids, default
+    except (OSError, json.JSONDecodeError, ValueError, TypeError) as exc:
+        raise PipelineError(f"Could not load voice profiles {path}: {exc}") from exc
+
+
+def choose_voice_profile(history: list[dict[str, Any]] | None = None) -> str:
+    """Return the next profile in a persistent round-robin sequence.
+
+    Old history entries without ``voice_profile`` are treated as pre-rotation
+    runs; the configured default is used once, then the next profile follows.
+    """
+    profiles, default = load_voice_profile_ids()
+    if not VOICE_ROTATION_ENABLED:
+        selected = SILMA_REFERENCE_PROFILE or default
+        if selected not in profiles:
+            raise PipelineError(
+                f"Unknown SILMA_REFERENCE_PROFILE {selected!r}; available profiles: {profiles}"
+            )
+        return selected
+
+    history = history if history is not None else load_topic_history()
+    last_profile = next(
+        (str(item.get("voice_profile", "")) for item in reversed(history)
+         if str(item.get("voice_profile", "")) in profiles),
+        None,
+    )
+    if last_profile is None:
+        return default
+    return profiles[(profiles.index(last_profile) + 1) % len(profiles)]
+
+
 def topic_is_too_similar(topic: Topic, history: list[dict[str, Any]]) -> bool:
     candidate = _topic_fingerprint(topic)
     candidate_words = set(candidate.split())
@@ -519,6 +567,7 @@ def remember_topic(topic: Topic) -> None:
                     "search_keywords_en": topic.search_keywords_en,
                     "category": topic.category,
                     "bank_id": topic.bank_id,
+                    "voice_profile": topic.voice_profile,
                     "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
     TOPIC_HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
     TOPIC_HISTORY_FILE.write_text(json.dumps(history[-HISTORY_LIMIT:], ensure_ascii=False, indent=2), encoding="utf-8")
@@ -1262,13 +1311,19 @@ def generate_edge_tts(text: str, out_path: Path, voice: str = TTS_VOICE) -> Path
     return with_retries(_call, what="Edge TTS fallback generation")
 
 
-def generate_tts(text: str, out_path: Path, voice: str = TTS_VOICE) -> Path:
-    """Generate SILMA, guard its audio, and fall back to Edge when needed."""
+def generate_tts(
+    text: str,
+    out_path: Path,
+    voice: str = TTS_VOICE,
+    reference_profile: str | None = None,
+) -> Path:
+    """Generate the selected SILMA voice and fall back to Edge when needed."""
     if TTS_ENGINE == "silma":
         try:
-            if SILMA_REFERENCE_PROFILE:
+            selected_profile = reference_profile or SILMA_REFERENCE_PROFILE
+            if selected_profile:
                 reference, ref_text = resolve_reference_profile(
-                    SILMA_REFERENCE_PROFILE, SILMA_VOICE_PROFILES_FILE
+                    selected_profile, SILMA_VOICE_PROFILES_FILE
                 )
             else:
                 reference, ref_text = load_reference(SILMA_REFERENCE_WAV, SILMA_REFERENCE_TEXT)
@@ -1296,7 +1351,17 @@ def get_media_duration(path: Path) -> float:
 
 
 def _audio_duration_exceeds_limit(duration_seconds: float) -> bool:
-    """Return true only when the actual voiceover exceeds the hard cap."""
+    """Return true when a final reel is outside the configured 60..90s window."""
+    return duration_seconds < MIN_AUDIO_SECONDS or duration_seconds > MAX_AUDIO_SECONDS
+
+
+def _reel_duration_needs_padding(duration_seconds: float) -> bool:
+    """Short narration is valid; the final reel is padded to the minimum length."""
+    return duration_seconds < MIN_AUDIO_SECONDS
+
+
+def _audio_duration_exceeds_maximum(duration_seconds: float) -> bool:
+    """Return true only when the hard upper cap is exceeded."""
     return duration_seconds > MAX_AUDIO_SECONDS
 
 
@@ -1712,6 +1777,7 @@ def assemble_video(
 ) -> Path:
     log.info("Assembling final video...")
     audio_duration = get_media_duration(narration)
+    reel_duration = max(audio_duration, MIN_AUDIO_SECONDS)
 
     # Escape path for ffmpeg's subtitles filter (colon needs escaping on all platforms)
     subtitle_filter_path = str(subtitle_path).replace("\\", "/").replace(":", "\\:")
@@ -1747,26 +1813,26 @@ def assemble_video(
 
     if music_path is not None:
         # Ducked mix: keep narration at full volume, music quiet underneath,
-        # loop/trim the music to the narration's exact length, short fades
+        # loop/trim the music to the final reel length, short fades
         # at the start/end so it doesn't cut off abruptly.
         filter_complex = (
-            f"[2:a]aloop=loop=-1:size=2e9,atrim=0:{audio_duration:.2f},"
-            f"afade=t=in:st=0:d=1.5,afade=t=out:st={max(audio_duration - 1.5, 0):.2f}:d=1.5,"
+            f"[2:a]aloop=loop=-1:size=2e9,atrim=0:{reel_duration:.2f},"
+            f"afade=t=in:st=0:d=1.5,afade=t=out:st={max(reel_duration - 1.5, 0):.2f}:d=1.5,"
             f"volume={MUSIC_VOLUME}[music];"
-            f"[1:a][music]amix=inputs=2:duration=first:dropout_transition=2:normalize=0[aout]"
+            f"[1:a]apad=whole_dur={reel_duration:.2f}[narration];"
+            f"[narration][music]amix=inputs=2:duration=first:dropout_transition=2:normalize=0[aout]"
         )
         cmd = [
             "ffmpeg", "-y",
             "-stream_loop", "-1", "-i", str(bg_video),
             *audio_inputs,
-            "-t", f"{audio_duration:.2f}",
+            "-t", f"{reel_duration:.2f}",
             "-vf", vf,
             "-r", str(OUTPUT_FPS),
             "-filter_complex", filter_complex,
             "-map", "0:v:0", "-map", "[aout]",
             "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
             "-c:a", "aac", "-b:a", "192k",
-            "-shortest",
             str(out_path),
         ]
     else:
@@ -1774,13 +1840,13 @@ def assemble_video(
             "ffmpeg", "-y",
             "-stream_loop", "-1", "-i", str(bg_video),
             *audio_inputs,
-            "-t", f"{audio_duration:.2f}",
+            "-t", f"{reel_duration:.2f}",
             "-vf", vf,
             "-r", str(OUTPUT_FPS),
-            "-map", "0:v:0", "-map", "1:a:0",
+            "-filter_complex", f"[1:a]apad=whole_dur={reel_duration:.2f}[aout]",
+            "-map", "0:v:0", "-map", "[aout]",
             "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
             "-c:a", "aac", "-b:a", "192k",
-            "-shortest",
             str(out_path),
         ]
 
@@ -2102,13 +2168,24 @@ def run_pipeline() -> None:
         json.dumps(topic.__dict__, ensure_ascii=False, indent=2), encoding="utf-8"
     )
 
+    voice_profile = choose_voice_profile()
+    topic.voice_profile = voice_profile
+    (run_dir / "topic.json").write_text(
+        json.dumps(topic.__dict__, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    log.info("Selected rotating voice profile for this video: %s", voice_profile)
+
     # Generate narration first so the final video length is measured from the
     # actual TTS audio, then choose enough distinct visual scenes to cover it.
     max_duration_attempts = 3
     narration_path = None
     audio_duration = 0.0
     for attempt in range(1, max_duration_attempts + 1):
-        narration_path = generate_tts(topic.narration_script, run_dir / "narration.mp3")
+        narration_path = generate_tts(
+            topic.narration_script,
+            run_dir / "narration.mp3",
+            reference_profile=voice_profile,
+        )
         audio_duration = get_media_duration(narration_path)
         log.info("Narration audio duration: %.1fs (attempt %d/%d)", audio_duration, attempt, max_duration_attempts)
         if _audio_duration_needs_normalization(audio_duration):
@@ -2117,7 +2194,7 @@ def run_pipeline() -> None:
                 TARGET_AUDIO_SECONDS, audio_duration, TARGET_AUDIO_SECONDS,
             )
             audio_duration = normalize_narration_duration(narration_path, TARGET_AUDIO_SECONDS)
-        if not _audio_duration_exceeds_limit(audio_duration):
+        if not _audio_duration_exceeds_maximum(audio_duration):
             break
         log.warning(
             "Narration remains over %.1fs after normalization (%.1fs); retrying TTS only (attempt %d/%d)",
@@ -2152,7 +2229,14 @@ def run_pipeline() -> None:
     scene_urls = search_pexels_videos(topic.scene_keywords_en, topic.search_keywords_en)
     scene_paths = [download_file(url, run_dir / f"scene_{i:02d}.mp4") for i, url in enumerate(scene_urls)]
     word_timings = _load_word_timings(narration_path.with_suffix(".timings.json"))
-    segment_durations = compute_scene_durations(word_timings, audio_duration, len(scene_paths))
+    reel_duration = max(audio_duration, MIN_AUDIO_SECONDS)
+    if _reel_duration_needs_padding(audio_duration):
+        log.info(
+            "Narration is %.1fs; extending the final reel with background audio/video to %.1fs "
+            "without adding unverified narration",
+            audio_duration, reel_duration,
+        )
+    segment_durations = compute_scene_durations(word_timings, reel_duration, len(scene_paths))
     bg_video_path = build_multishot_background(scene_paths, segment_durations, run_dir / "background.mp4")
     music_path = get_bg_music(run_dir)
 
@@ -2167,12 +2251,15 @@ def run_pipeline() -> None:
         bg_video_path, narration_path, subtitle_path, run_dir / "final.mp4", music_path=music_path,
     )
     final_video_duration = get_media_duration(final_video_path)
-    if _audio_duration_exceeds_limit(final_video_duration):
+    if final_video_duration < MIN_AUDIO_SECONDS - 0.25 or final_video_duration > MAX_AUDIO_SECONDS:
         raise PipelineError(
-            f"Assembled video is {final_video_duration:.2f}s; the maximum is "
-            f"{MAX_AUDIO_SECONDS:.0f}s. Publishing is blocked."
+            f"Assembled video is {final_video_duration:.2f}s; required window is "
+            f"{MIN_AUDIO_SECONDS:.0f}..{MAX_AUDIO_SECONDS:.0f}s. Publishing is blocked."
         )
-    log.info("Assembled video duration: %.2fs (maximum %.0fs)", final_video_duration, MAX_AUDIO_SECONDS)
+    log.info(
+        "Assembled video duration: %.2fs (required window %.0f..%.0fs)",
+        final_video_duration, MIN_AUDIO_SECONDS, MAX_AUDIO_SECONDS,
+    )
 
     result = publish_video(final_video_path, topic, BUFFER_CHANNEL_IDS)
     (run_dir / "publish_result.json").write_text(
