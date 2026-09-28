@@ -68,11 +68,10 @@ jobs:
 
       - name: Generate and publish
         env:
-          # >>> MODIFIED: OpenRouter replaces Groq
+          # >>> MODIFIED: OpenRouter replaces Groq (Llama 3.3 70B free tier)
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          OPENROUTER_MODEL: 'qwen/qwen-2.5-72b-instruct:free'
+          OPENROUTER_MODEL: 'meta-llama/llama-3.3-70b-instruct:free'
           OPENROUTER_TITLE: 'Auto Publish Reels'
-          # OPENROUTER_REFERER is optional; main.py falls back to the repo URL if unset
 
           PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
           BUFFER_API_KEY: ${{ secrets.BUFFER_API_KEY }}
@@ -81,11 +80,10 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
 
-          # >>> MODIFIED: strict 60-90s window with safety margin + hard min
           MIN_AUDIO_SECONDS: '60'
           MAX_AUDIO_SECONDS: '90'
-          TARGET_AUDIO_SECONDS: '85'          # was 89 — leaves a 5s safety margin
-          MIN_SCRIPT_WORDS: '120'             # NEW — enforces a ~60s floor
+          TARGET_AUDIO_SECONDS: '85'
+          MIN_SCRIPT_WORDS: '120'
           MAX_SCRIPT_WORDS: '165'
           REQUIRE_EXTERNAL_SOURCES: 'false'
           VOICE_ROTATION_ENABLED: 'true'
@@ -96,13 +94,12 @@ jobs:
           FACT_CHECK_SOURCES_FILE: 'config/fact_sources.json'
 
           # >>> MODIFIED: fact_check.py must also be pointed at OpenRouter
-          # (see notes below — this file still needs a small patch)
-          FACT_CHECK_MODEL: 'qwen/qwen-2.5-72b-instruct:free'
+          FACT_CHECK_MODEL: 'meta-llama/llama-3.3-70b-instruct:free'
           FACT_CHECK_MIN_CONFIDENCE: '0.85'
           FACT_CHECK_MAX_SOURCE_CHARS: '6000'
           FACT_CHECK_MAX_TOTAL_SOURCE_CHARS: '8000'
           FACT_CHECK_MAX_COMPLETION_TOKENS: '2048'
-          FACT_CHECK_OPENROUTER_MAX_RETRIES: '4'   # >>> MODIFIED: was FACT_CHECK_GROQ_MAX_RETRIES
+          FACT_CHECK_OPENROUTER_MAX_RETRIES: '4'
 
           TTS_ENGINE: 'silma'
           SILMA_REFERENCE_PROFILE: ${{ inputs.voice_profile || 'mohamed_elbed' }}
