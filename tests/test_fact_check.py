@@ -4,421 +4,111 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-import requests
-
 from fact_check import (
-    CLAIM_EXTRACTION_SCHEMA,
-    CLAIM_VERDICT_SCHEMA,
     MAX_TOTAL_SOURCE_CHARS,
     FactCheckError,
     _extract_claims,
-    _groq_json,
+    _json_from_model,
     _judge_claims,
     fact_check_topic,
-    fetch_source,
-    preflight_topic_sources,
 )
 
 
-ROOT = Path(__file__).resolve().parents[1]
-
-
-class FactCheckSourceFallbackTests(unittest.TestCase):
+class FactCheckTests(unittest.TestCase):
     def setUp(self):
         self.topic = {
-            "title": "Test topic",
-            "narration_script": "Arabic narration text",
-            "verified_fact": "A supported scientific claim.",
-            "source_urls": ["https://example.gov/unavailable", "https://example.gov/available"],
+            "title": "موضوع اختباري",
+            "caption": "شرح مختصر",
+            "narration_script": "هذه حقيقة علمية موثقة.",
+            "verified_fact": "هذه حقيقة علمية موثقة.",
         }
-        self.config = {"allowed_domains": ["example.gov"], "minimum_confidence": 0.85}
+        self.source = {
+            "url": "https://example.org/article",
+            "text": "دليل موثق " * 80,
+        }
 
-    def test_one_unavailable_source_does_not_discard_other_evidence(self):
-        source = {"url": self.topic["source_urls"][1], "text": "official evidence"}
+    def test_json_parser_accepts_fenced_model_output(self):
+        parsed = _json_from_model("```json\n{\"claims\": []}\n```")
+        self.assertEqual(parsed, {"claims": []})
+
+    def test_json_parser_rejects_missing_json(self):
+        with self.assertRaises(FactCheckError):
+            _json_from_model("not json")
+
+    def test_fact_check_reuses_prefetched_sources(self):
         verdict = {
             "claims": [{
-                "claim": "A supported scientific claim.",
+                "claim": "حقيقة",
                 "verdict": "supported",
                 "confidence": 0.95,
-                "evidence_quote": "official evidence",
-                "source_url": source["url"],
-                "reason": "Directly supported.",
+                "evidence_quote": "دليل موثق",
+                "source_url": self.source["url"],
+                "reason": "مدعوم بالمصدر",
             }],
-            "overall_reason": "Supported by the accessible official source.",
+            "overall_reason": "مدعوم",
         }
         with (
-            patch("fact_check._load_config", return_value=self.config),
-            patch("fact_check.fetch_source", side_effect=[requests.HTTPError("403 Forbidden"), source]),
-            patch("fact_check._extract_claims", return_value=[{"claim": "A supported scientific claim."}]) as extract_claims,
+            patch("fact_check._load_config", return_value={"minimum_confidence": 0.85}),
+            patch("fact_check._extract_claims", return_value=[{"claim": "حقيقة"}]),
             patch("fact_check._judge_claims", return_value=verdict),
+            patch("fact_check.fetch_wikipedia_source") as fetch,
         ):
-            report = fact_check_topic(self.topic)
-
-        self.assertEqual(report["status"], "PASS")
-        self.assertIn(self.topic["title"], extract_claims.call_args.args[0])
-        self.assertIn(self.topic["narration_script"], extract_claims.call_args.args[0])
-        self.assertEqual(report["sources_fetched"], [source["url"]])
-        self.assertEqual(len(report["source_fetch_errors"]), 1)
-        self.assertEqual(report["errors"], [])
-
-    def test_rejects_when_every_source_is_unavailable(self):
-        with (
-            patch("fact_check._load_config", return_value=self.config),
-            patch("fact_check.REQUIRE_EXTERNAL_SOURCES", True),
-            patch("fact_check.fetch_source", side_effect=requests.HTTPError("403 Forbidden")),
-            patch("fact_check._extract_claims") as extract_claims,
-        ):
-            report = fact_check_topic(self.topic)
-
-        self.assertEqual(report["status"], "REJECT")
-        self.assertEqual(report["sources_fetched"], [])
-        self.assertEqual(len(report["source_fetch_errors"]), 2)
-        self.assertIn("No accessible Fact Check sources", report["errors"][0])
-        extract_claims.assert_not_called()
-
-    def test_prefetched_evidence_is_reused_without_refetching(self):
-        source = {
-            "url": self.topic["source_urls"][1],
-            "text": "official evidence " + ("supporting details " * 30),
-        }
-        verdict = {
-            "claims": [{
-                "claim": "A supported scientific claim.",
-                "verdict": "supported",
-                "confidence": 0.95,
-                "evidence_quote": "official evidence",
-                "source_url": source["url"],
-                "reason": "Directly supported.",
-            }],
-            "overall_reason": "Supported by preflighted evidence.",
-        }
-        with (
-            patch("fact_check._load_config", return_value=self.config),
-            patch("fact_check.fetch_source") as fetch,
-            patch("fact_check._extract_claims", return_value=[{"claim": "A supported scientific claim."}]),
-            patch("fact_check._judge_claims", return_value=verdict),
-        ):
-            report = fact_check_topic(
-                self.topic,
-                prefetched_sources=[source],
-                preflight_source_errors=[{"url": self.topic["source_urls"][0], "error": "403 Forbidden"}],
-            )
+            report = fact_check_topic(self.topic, prefetched_sources=[self.source])
 
         fetch.assert_not_called()
         self.assertEqual(report["status"], "PASS")
-        self.assertEqual(report["sources_fetched"], [source["url"]])
-        self.assertEqual(len(report["source_fetch_errors"]), 1)
+        self.assertEqual(report["sources_fetched"], [self.source["url"]])
 
-    def test_vetted_bank_fact_is_used_when_external_sources_are_unavailable(self):
-        verdict = {
-            "claims": [{
-                "claim": "A supported scientific claim.",
-                "verdict": "supported",
-                "confidence": 0.95,
-                "evidence_quote": self.topic["verified_fact"],
-                "source_url": "topic-bank://verified_fact",
-                "reason": "Supported by the vetted topic-bank fact.",
-            }],
-            "overall_reason": "External source unavailable; checked against the vetted bank fact.",
-        }
+    def test_fact_check_rejects_when_no_source_is_available(self):
+        topic = dict(self.topic, verified_fact="")
         with (
-            patch("fact_check._load_config", return_value=self.config),
-            patch("fact_check.REQUIRE_EXTERNAL_SOURCES", False),
-            patch("fact_check.fetch_source", side_effect=requests.HTTPError("403 Forbidden")),
-            patch("fact_check._extract_claims", return_value=[{"claim": self.topic["verified_fact"]}]),
-            patch("fact_check._judge_claims", return_value=verdict) as judge,
+            patch("fact_check._load_config", return_value={"minimum_confidence": 0.85}),
+            patch("fact_check.fetch_wikipedia_source", return_value=None),
         ):
-            report = fact_check_topic(self.topic)
+            report = fact_check_topic(topic)
 
-        self.assertEqual(report["status"], "PASS")
-        self.assertEqual(report["sources_fetched"], ["topic-bank://verified_fact"])
-        self.assertEqual(judge.call_args.args[3][0]["url"], "topic-bank://verified_fact")
+        self.assertEqual(report["status"], "REJECT")
+        self.assertTrue(any("No source available" in error for error in report["errors"]))
 
-    def test_preflight_returns_usable_sources_and_structured_failures(self):
-        good = {"url": self.topic["source_urls"][1], "text": "x" * 350}
-        with (
-            patch("fact_check._load_config", return_value=self.config),
-            patch("fact_check.fetch_source", side_effect=[requests.HTTPError("403 Forbidden"), good]),
-        ):
-            sources, errors = preflight_topic_sources(self.topic["source_urls"])
-
-        self.assertEqual(sources, [good])
-        self.assertEqual(errors, [{"url": self.topic["source_urls"][0], "error": "403 Forbidden"}])
-
-    def test_fact_check_payload_respects_total_source_character_budget(self):
-        sources = [
-            {"url": self.topic["source_urls"][0], "text": "A" * 7000},
-            {"url": self.topic["source_urls"][1], "text": "B" * 7000},
+    def test_fact_check_limits_total_source_characters(self):
+        large_sources = [
+            {"url": "https://example.org/one", "text": "A" * 7000},
+            {"url": "https://example.org/two", "text": "B" * 7000},
         ]
         verdict = {
             "claims": [{
-                "claim": "A supported scientific claim.",
+                "claim": "حقيقة",
                 "verdict": "supported",
                 "confidence": 0.95,
-                "evidence_quote": "official evidence",
-                "source_url": sources[0]["url"],
-                "reason": "Directly supported.",
+                "evidence_quote": "A",
+                "source_url": large_sources[0]["url"],
+                "reason": "مدعوم",
             }],
-            "overall_reason": "Supported by the accessible sources.",
         }
         with (
-            patch("fact_check._load_config", return_value=self.config),
-            patch("fact_check.fetch_source", side_effect=sources),
-            patch("fact_check._extract_claims", return_value=[{"claim": "A supported scientific claim."}]),
+            patch("fact_check._load_config", return_value={"minimum_confidence": 0.85}),
+            patch("fact_check._extract_claims", return_value=[{"claim": "حقيقة"}]),
             patch("fact_check._judge_claims", return_value=verdict) as judge,
         ):
-            report = fact_check_topic(self.topic)
+            report = fact_check_topic(self.topic, prefetched_sources=large_sources)
 
-        evidence = judge.call_args.args[3]
+        evidence = judge.call_args.args[2]
         self.assertLessEqual(sum(len(source["text"]) for source in evidence), MAX_TOTAL_SOURCE_CHARS)
         self.assertEqual(report["status"], "PASS")
 
-
-class GroqRateLimitRetryTests(unittest.TestCase):
-    def test_retries_transient_429_using_provider_reset_hint(self):
-        limited = SimpleNamespace(
-            status_code=429,
-            headers={},
-            text="Rate limit. Please try again in 9.5925s.",
-        )
-        success = SimpleNamespace(
-            status_code=200,
-            headers={},
-            text="",
-            json=lambda: {"choices": [{"message": {"content": '{"claims": []}'}}]},
-        )
-        with (
-            patch("fact_check.GROQ_API_KEY", "test-key"),
-            patch("fact_check.requests.post", side_effect=[limited, success]) as post,
-            patch("fact_check.time.sleep") as sleep,
-        ):
-            result = _groq_json(
-                "system",
-                "user",
-                schema_name="test_claims",
-                schema=CLAIM_EXTRACTION_SCHEMA,
-                max_tokens=700,
-            )
-
-        self.assertEqual(result, {"claims": []})
-        self.assertEqual(post.call_count, 2)
-        self.assertAlmostEqual(sleep.call_args.args[0], 10.5925)
-        self.assertEqual(post.call_args_list[0].kwargs["json"]["max_completion_tokens"], 700)
-
-    def test_strict_json_schema_is_sent_for_constrained_decoding(self):
-        success = SimpleNamespace(
-            status_code=200,
-            headers={},
-            text="",
-            json=lambda: {"choices": [{"message": {"content": '{"claims": []}'}}]},
-        )
-        with (
-            patch("fact_check.GROQ_API_KEY", "test-key"),
-            patch("fact_check.requests.post", return_value=success) as post,
-        ):
-            result = _groq_json(
-                "extract claims",
-                "script",
-                schema_name="test_claims",
-                schema=CLAIM_EXTRACTION_SCHEMA,
-                max_tokens=700,
-            )
-
-        self.assertEqual(result, {"claims": []})
-        self.assertEqual(post.call_count, 1)
-        response_format = post.call_args.kwargs["json"]["response_format"]
-        self.assertEqual(response_format["type"], "json_schema")
-        self.assertEqual(response_format["json_schema"]["name"], "test_claims")
-        self.assertTrue(response_format["json_schema"]["strict"])
-        self.assertEqual(response_format["json_schema"]["schema"], CLAIM_EXTRACTION_SCHEMA)
-        self.assertEqual(post.call_args.kwargs["json"]["reasoning_effort"], "low")
-        self.assertFalse(post.call_args.kwargs["json"]["include_reasoning"])
-
-    def test_model_without_strict_schema_support_is_rejected_before_request(self):
-        with (
-            patch("fact_check.GROQ_API_KEY", "test-key"),
-            patch("fact_check.FACT_CHECK_MODEL", "some/unsupported-model"),
-            patch("fact_check.requests.post") as post,
-            self.assertRaisesRegex(FactCheckError, "does not support Groq strict JSON Schema"),
-        ):
-            _groq_json(
-                "extract claims",
-                "script",
-                schema_name="test_claims",
-                schema=CLAIM_EXTRACTION_SCHEMA,
-            )
-
-        post.assert_not_called()
-
-    def test_strict_schema_rejection_never_falls_back_to_unconstrained_text(self):
-        rejected_schema = SimpleNamespace(
-            status_code=400,
-            headers={},
-            text='{"error":{"code":"json_validate_failed"}}',
-            json=lambda: {"error": {"code": "json_validate_failed"}},
-        )
-        with (
-            patch("fact_check.GROQ_API_KEY", "test-key"),
-            patch("fact_check.GROQ_JSON_FORMAT_MAX_RETRIES", 0),
-            patch("fact_check.requests.post", return_value=rejected_schema) as post,
-            self.assertRaisesRegex(FactCheckError, "refusing an unconstrained text fallback"),
-        ):
-            _groq_json(
-                "extract claims",
-                "script",
-                schema_name="test_claims",
-                schema=CLAIM_EXTRACTION_SCHEMA,
-                max_tokens=700,
-            )
-
-        self.assertEqual(post.call_count, 1)
-
-    def test_strict_json_validation_failure_retries_once_with_more_tokens(self):
-        rejected_schema = SimpleNamespace(
-            status_code=400,
-            headers={},
-            text='{"error":{"code":"json_validate_failed","failed_generation":""}}',
-            json=lambda: {"error": {"code": "json_validate_failed"}},
-        )
-        success = SimpleNamespace(
-            status_code=200,
-            headers={},
-            text="",
-            json=lambda: {"choices": [{"message": {"content": '{"claims": []}'}}]},
-        )
-        with (
-            patch("fact_check.GROQ_API_KEY", "test-key"),
-            patch("fact_check.GROQ_JSON_FORMAT_MAX_RETRIES", 1),
-            patch("fact_check.requests.post", side_effect=[rejected_schema, success]) as post,
-        ):
-            result = _groq_json(
-                "extract claims",
-                "script",
-                schema_name="test_claims",
-                schema=CLAIM_EXTRACTION_SCHEMA,
-                max_tokens=1024,
-            )
-
-        self.assertEqual(result, {"claims": []})
-        self.assertEqual(post.call_count, 2)
-        self.assertEqual(
-            [call.kwargs["json"]["max_completion_tokens"] for call in post.call_args_list],
-            [1024, 2048],
-        )
-        self.assertTrue(all(
-            call.kwargs["json"]["response_format"]["json_schema"]["strict"]
-            for call in post.call_args_list
-        ))
-
-    def test_other_400_errors_are_not_retried_as_strict_schema_failures(self):
-        bad_request = SimpleNamespace(
-            status_code=400,
-            headers={},
-            text='{"error":{"code":"invalid_request_error"}}',
-            json=lambda: {"error": {"code": "invalid_request_error"}},
-        )
-        with (
-            patch("fact_check.GROQ_API_KEY", "test-key"),
-            patch("fact_check.requests.post", return_value=bad_request) as post,
-            self.assertRaisesRegex(FactCheckError, "request failed \\(400\\)"),
-        ):
-            _groq_json(
-                "system",
-                "user",
-                schema_name="test_claims",
-                schema=CLAIM_EXTRACTION_SCHEMA,
-            )
-
-        self.assertEqual(post.call_count, 1)
-
-    def test_persistent_429_is_bounded_and_fails_closed(self):
-        limited = SimpleNamespace(status_code=429, headers={"Retry-After": "0"}, text="still limited")
-        with (
-            patch("fact_check.GROQ_API_KEY", "test-key"),
-            patch("fact_check.GROQ_RATE_LIMIT_MAX_RETRIES", 2),
-            patch("fact_check.requests.post", return_value=limited) as post,
-            patch("fact_check.time.sleep") as sleep,
-            self.assertRaisesRegex(FactCheckError, "persisted after 2 retries"),
-        ):
-            _groq_json(
-                "system",
-                "user",
-                schema_name="test_claims",
-                schema=CLAIM_EXTRACTION_SCHEMA,
-            )
-
-        self.assertEqual(post.call_count, 3)
-        self.assertEqual(sleep.call_count, 2)
-
-    def test_extraction_and_judging_use_distinct_strict_schemas(self):
+    def test_claim_extraction_normalizes_model_claims(self):
         with patch(
-            "fact_check._groq_json",
-            return_value={
-                "claims": [{"claim": "ادعاء موثق", "importance": "core", "numeric": False}]
-            },
-        ) as call:
-            claims = _extract_claims("نص الفيديو", "الحقيقة الثابتة")
-
-        self.assertEqual(claims[0]["claim"], "ادعاء موثق")
-        self.assertEqual(call.call_args.kwargs["schema_name"], "fact_check_claims")
-        self.assertEqual(call.call_args.kwargs["schema"], CLAIM_EXTRACTION_SCHEMA)
-        self.assertEqual(call.call_args.kwargs["max_tokens"], 2048)
-
-        sources = [{"url": "https://example.org/a", "text": "دليل"}]
-        with patch(
-            "fact_check._groq_json",
-            return_value={"claims": [], "overall_reason": ""},
-        ) as call:
-            _judge_claims("نص الفيديو", "الحقيقة الثابتة", claims, sources)
-
-        self.assertEqual(call.call_args.kwargs["schema_name"], "fact_check_verdicts")
-        self.assertEqual(call.call_args.kwargs["schema"], CLAIM_VERDICT_SCHEMA)
-
-    def test_invalid_local_claim_types_are_rejected_not_coerced(self):
-        with (
-            patch(
-                "fact_check._groq_json",
-                return_value={
-                    "claims": [{"claim": "ادعاء", "importance": "core", "numeric": "false"}]
-                },
-            ),
-            self.assertRaisesRegex(FactCheckError, "non-boolean numeric flag"),
+            "fact_check._llm_call",
+            return_value={"claims": [{"claim": " ادعاء ", "importance": "bad", "numeric": 1}]},
         ):
-            _extract_claims("نص", "حقيقة")
+            claims = _extract_claims("نص")
+        self.assertEqual(claims, [{"claim": "ادعاء", "importance": "core", "numeric": True}])
 
-    def test_generic_noaa_nasa_indexes_are_rejected_before_network_fetch(self):
-        indexes = [
-            "https://oceanservice.noaa.gov/facts/",
-            "https://science.nasa.gov/earth/facts/",
-            "https://science.nasa.gov/mars/facts/",
-        ]
-        with patch("fact_check.requests.get") as get:
-            for url in indexes:
-                with self.subTest(url=url), self.assertRaisesRegex(FactCheckError, "generic index"):
-                    fetch_source(url, ["noaa.gov", "nasa.gov"])
-        get.assert_not_called()
-
-
-class SpecificNOAASourceTests(unittest.TestCase):
-    def test_noaa_topics_use_specific_evidence_pages_not_homepage(self):
-        data = json.loads((ROOT / "config/topic_bank.json").read_text(encoding="utf-8"))
-        expected = {
-            "earth_11_": "https://www.weather.gov/safety/lightning-science-overview",
-            "earth_12_": "https://www.ncei.noaa.gov/news/planet-postcard-glacial-revelations",
-            "eng_05_": "https://www.weather.gov/about/radar",
-            "odd_04_": "https://www.nesdis.noaa.gov/about/k-12-education/optical-phenomena/what-causes-rainbow",
-        }
-        for prefix, url in expected.items():
-            matches = [x for x in data["topics"] if x.get("id", "").startswith(prefix)]
-            with self.subTest(topic_group=prefix):
-                self.assertEqual(len(matches), 10)
-                self.assertTrue(all(x.get("source_urls") == [url] for x in matches))
-
-        lightning_comparison = next(x for x in data["topics"] if x.get("id") == "earth_11_02")
-        self.assertEqual(lightning_comparison["angle"], "كيف يؤدي تسخين الهواء بالبرق إلى صوت الرعد؟")
-
-        source_config = json.loads((ROOT / "config/fact_sources.json").read_text(encoding="utf-8"))
-        self.assertIn("weather.gov", source_config["allowed_domains"])
+    def test_judge_claims_passes_source_evidence_to_llm(self):
+        with patch("fact_check._llm_call", return_value={"claims": []}) as call:
+            _judge_claims("نص", [{"claim": "ادعاء"}], [self.source])
+        payload = json.loads(call.call_args.args[1])
+        self.assertIn(self.source["url"], payload["sources"])
 
 
 if __name__ == "__main__":

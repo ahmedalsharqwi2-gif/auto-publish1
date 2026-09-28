@@ -5,6 +5,12 @@ on:
     - cron: '0 11 * * *'
     - cron: '0 15 * * *'
   workflow_dispatch:
+    inputs:
+      voice_profile:
+        description: 'SILMA voice profile'
+        required: false
+        default: 'mohamed_elbed'
+        type: string
 
 concurrency:
   group: auto-publish-voice-rotation
@@ -91,6 +97,9 @@ jobs:
               print(f"Validated rotating profile {profile_id}: {wav} ({len(text.split())} words)")
           PY
 
+      - name: Run unit tests
+        run: python -m unittest discover -s tests -p 'test_*.py' -v
+
       - name: Generate and publish
         env:
           # --- LLM provider: Gemini (primary) ---
@@ -99,6 +108,7 @@ jobs:
           # given separated by commas and they are tried in order.
           GEMINI_MODEL: 'gemini-3.8-flash'
           GEMINI_THINKING_LEVEL: 'low'
+          GEMINI_MIN_OUTPUT_TOKENS: '0'
           LLM_MAX_COMPLETION_TOKENS: '4000'
 
           # --- LLM provider: OpenRouter (optional fallback only) ---
