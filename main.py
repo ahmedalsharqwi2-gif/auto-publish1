@@ -59,7 +59,7 @@ from typing import Any
 
 import requests
 from tts_quality import enforce_text_quality, generate_silma_guarded, load_reference, resolve_reference_profile
-from fact_check import fact_check_topic
+from fact_check import fact_check_topic, preflight_topic_sources
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -221,6 +221,10 @@ class PipelineError(Exception):
     """Raised for any unrecoverable pipeline failure."""
 
 
+class SourcePreflightError(PipelineError):
+    """Raised when no unused topic has any accessible evidence source."""
+
+
 # The exact 11 categories listed in SYSTEM_PROMPT's opening paragraph, kept
 # here too so remember_topic()/_call() can track which ones were used
 # recently and stop the model from repeating one (see recent_categories in
@@ -274,6 +278,8 @@ def with_retries(fn, *args, what: str = "operation", max_retries: int | None = N
     for attempt in range(1, attempts + 1):
         try:
             return fn(*args, **kwargs)
+        except SourcePreflightError:
+            raise
         except Exception as exc:  # noqa: BLE001
             last_err = exc
             log.warning("Attempt %d/%d for %s failed: %s", attempt, attempts, what, exc)
@@ -299,64 +305,19 @@ def _trim_script_to_word_limit(script: str, max_words: int) -> str:
     return truncated.strip()
 
 
-# Fixed engagement outro appended to the end of EVERY narration_script (both
-# spoken by the TTS voice and shown as subtitles) — replaces the old
-# generic, content-free filler sentences that used to appear only when a
-# Groq response came up short. Written in Modern Standard Arabic (فصحى)
-# rather than Egyptian colloquial so the TTS voice pronounces every word
-# correctly and consistently, matching the rest of the narration. Two
-# variants exist so consecutive videos don't end on identical audio/
-# subtitles; exactly ONE of the two is picked at random each run (see
-# _append_engagement_outro) — never both. Each asks for a like + subscribe,
-# one of the two comment prompts, and a bell-notification reminder.
-#
-# Tashkeel here is deliberately targeted rather than exhaustive: full
-# desinential (i'raab) marks on every word would clutter the on-screen
-# captions for no benefit, but a few specific spots reliably mispronounce
-# without ANY diacritic and need one regardless of the "light tashkeel"
-# rule elsewhere:
-#   - attached pronoun suffixes (ـكَ) — otherwise edge-tts guesses a vowel
-#     and often gets gender/case wrong
-#   - "زر" (button) is a homograph with "زُر" (imperative of "to visit");
-#     undiacritized it is frequently read as the wrong word entirely, so it
-#     is always spelled زِرّ/زِرَّ/زِرِّ (per its case) here
-#   - the Form VIII imperative "اشترك" (subscribe) needs its short vowels
-#     marked (اشْتَرِكْ) or it can be read as a different verb form
-#   - the jussive "لا تَنْسَ" needs its vowels marked so it isn't read as
-#     the indicative "لا تنسى"
-#   - "جرس" (bell) with no diacritics has no single obvious reading for a
-#     TTS engine guessing blind, and was confirmed mispronounced in
-#     production — its two root vowels are always marked (جَرَس) here
-CTA_OUTRO_VARIANTS = [
-    "إنْ أَعْجَبَكَ هذا الفيديو فلا تَنْسَ الإعجابَ به والاشتراكَ في القناة، وأخبِرْنا في التعليقات: هل كانت هذه المعلومة جديدة عليك؟ ولا تَنْسَ تفعيل زِرِّ الجَرَس ليصلَكَ كل جديد.",
-    "اضغط زِرَّ الإعجاب واشْتَرِكْ في القناة إن استفدت من هذا الفيديو، واكتب لنا في التعليقات الموضوع الذي تريد أن نتحدث عنهُ في الفيديو القادم، ولا تَنْسَ تفعيل زِرِّ الجَرَس لتكون أول من يعلم.",
-]
-
-# The two constants below turn "the outro adds roughly 30 words" (previously
-# just an assumption baked silently into MIN/MAX_SCRIPT_WORDS handling) into
-# an exact, derived fact. generate_topic() uses OUTRO_MIN_WORDS to work out
-# how much of a shortfall the outro can and can't be trusted to cover on its
-# own — the root cause of the "narration_script only N words even after the
-# engagement outro" failures was that a script needed real expansion, not
-# just the outro, to clear MIN_SCRIPT_WORDS. OUTRO_MAX_WORDS is used
-# symmetrically so trimming an over-long script also leaves room for
-# whichever variant random.choice() ends up picking.
-OUTRO_MIN_WORDS = min(len(v.split()) for v in CTA_OUTRO_VARIANTS)
-OUTRO_MAX_WORDS = max(len(v.split()) for v in CTA_OUTRO_VARIANTS)
+# One fixed closing phrase chosen by the user. It is spoken by TTS and appears
+# in the burned-in subtitles on every video; there are no alternate CTAs.
+CTA_OUTRO = "إِذَا أَعْجَبَكَ الْفِيدْيُو، فَاضْغَطْ زِرَّ الإِعْجَابِ، وَلا تَنْسَ مُشَارَكَةَ الْفِيدْيُو"
+OUTRO_MIN_WORDS = len(CTA_OUTRO.split())
+OUTRO_MAX_WORDS = OUTRO_MIN_WORDS
 
 
-def _append_engagement_outro(script: str, min_words: int) -> str:
-    """Append exactly ONE randomly chosen subscribe/like/comment/bell
-    call-to-action (see CTA_OUTRO_VARIANTS) to the end of every
-    narration_script — never more than one, even if the script is still
-    short of min_words afterward. A short script is a Groq-output problem
-    to be fixed by retrying topic generation (see generate_topic), not by
-    padding the ending with a second, redundant outro sentence.
-    """
-    words = script.split()
-    variant = random.choice(CTA_OUTRO_VARIANTS)
-    words.extend(variant.split())
-    return " ".join(words)
+def _append_engagement_outro(script: str) -> str:
+    """Append the user's exact closing phrase once, never a random variant."""
+    text = script.strip()
+    if text.endswith(CTA_OUTRO):
+        return text
+    return f"{text} {CTA_OUTRO}".strip()
 
 
 _TASHKEEL_CHARS = "\u0610-\u061A\u064B-\u065F\u06D6-\u06DC\u06DF-\u06E8\u06EA-\u06ED\u0670"
@@ -373,10 +334,9 @@ def _normalize_for_compare(s: str) -> str:
 
 
 # --- Automated self-check: catch a missing pronoun diacritic before it ships ---
-# Both bugs fixed in CTA_OUTRO_VARIANTS above (ليصلَك -> ليصلَكَ، عنه -> عنهُ)
-# had the SAME shape: the "attached pronoun suffixes must always be
-# diacritized" rule was documented in the comment above CTA_OUTRO_VARIANTS,
-# but wasn't actually applied when that particular word was hand-typed. A
+# The fixed CTA's attached pronoun suffix (أَعْجَبَكَ) is checked here. The
+# "attached pronoun suffixes must always be diacritized" rule is enforced in
+# code so an edit cannot silently reintroduce a mispronunciation. A
 # rule that only lives in a comment relies on someone re-reading and
 # re-checking it by eye every time the string is touched — exactly what
 # just failed twice. Enforcing it in code instead means a future edit that
@@ -418,25 +378,19 @@ def _find_unmarked_pronoun_suffixes(text: str) -> list[str]:
 
 
 def _validate_fixed_arabic_strings() -> None:
-    """Run once at import time over every hand-written Arabic constant we
-    control (currently just CTA_OUTRO_VARIANTS) — see the block comment
-    above for why. Deliberately NOT applied to Groq's own narration_script
+    """Run once at import time over the fixed user-selected CTA.
+    Deliberately NOT applied to Groq's own narration_script
     output: that text is dynamic and this same check would false-positive
     constantly on legitimate root-letter ك/ه endings in arbitrary content;
     Groq's output is governed instead by the tashkeel rules inside
     SYSTEM_PROMPT."""
-    for i, variant in enumerate(CTA_OUTRO_VARIANTS, start=1):
-        offenders = _find_unmarked_pronoun_suffixes(variant)
-        if offenders:
-            raise PipelineError(
-                f"CTA_OUTRO_VARIANTS[{i}] has word(s) ending in a bare ك/ه with no "
-                f"diacritic on that letter: {offenders} — this is the exact bug "
-                f"class already found twice in production (ليصلَك، عنه). Add the "
-                f"missing tashkeel to the word itself, or if ك/ه here is genuinely "
-                f"a root letter with no real pronunciation risk, add the word to "
-                f"_TASHKEEL_CHECK_ALLOWLIST above with a one-line reason. "
-                f"Full string: {variant!r}"
-            )
+    offenders = _find_unmarked_pronoun_suffixes(CTA_OUTRO)
+    if offenders:
+        raise PipelineError(
+            f"CTA_OUTRO has word(s) ending in a bare ك/ه with no diacritic "
+            f"on that letter: {offenders}. Add the missing tashkeel or a "
+            f"justified entry to _TASHKEEL_CHECK_ALLOWLIST. Full string: {CTA_OUTRO!r}"
+        )
 
 
 _validate_fixed_arabic_strings()
@@ -481,19 +435,59 @@ def load_topic_bank() -> list[dict[str, Any]]:
     except (OSError, json.JSONDecodeError) as exc:
         raise PipelineError(f"Could not load topic bank {TOPIC_BANK_FILE}: {exc}") from exc
 
-def choose_topic_seed(history: list[dict[str, Any]], blocked_categories: set[str] | None = None) -> dict[str, Any]:
+def _topic_source_signature(topic: dict[str, Any]) -> tuple[str, ...]:
+    return tuple(sorted({str(url).strip() for url in topic.get("source_urls", []) if str(url).strip()}))
+
+
+def choose_topic_seed(
+    history: list[dict[str, Any]],
+    blocked_categories: set[str] | None = None,
+    excluded_source_signatures: set[tuple[str, ...]] | None = None,
+) -> dict[str, Any]:
     bank = load_topic_bank()
     used = {str(x.get("bank_id", "")) for x in history if x.get("bank_id")}
-    available = [x for x in bank if str(x.get("id")) not in used]
+    excluded = excluded_source_signatures or set()
+    available = [
+        x for x in bank
+        if str(x.get("id")) not in used and _topic_source_signature(x) not in excluded
+    ]
     blocked = blocked_categories or set()
     varied = [x for x in available if str(x.get("category", "")) not in blocked]
     if varied:
         available = varied
     if not available:
+        if excluded:
+            raise SourcePreflightError(
+                f"No unused topic has accessible citations after checking {len(excluded)} unique source set(s)"
+            )
         raise PipelineError("All topic-bank entries have already been used; archive or reset topic_history.json")
     # A random choice is safe here because the durable bank_id in history is the
     # actual uniqueness guard; reruns never silently reuse a selected entry.
     return random.SystemRandom().choice(available)
+
+
+def choose_reachable_topic_seed(
+    history: list[dict[str, Any]],
+    blocked_categories: set[str] | None = None,
+    excluded_source_signatures: set[tuple[str, ...]] | None = None,
+) -> tuple[dict[str, Any], list[dict[str, str]], list[dict[str, str]]]:
+    """Choose a seed only after at least one of its allow-listed sources is fetched."""
+    excluded = excluded_source_signatures if excluded_source_signatures is not None else set()
+    while True:
+        seed = choose_topic_seed(history, blocked_categories, excluded)
+        signature = _topic_source_signature(seed)
+        sources, errors = preflight_topic_sources(list(seed.get("source_urls", [])))
+        if sources:
+            selected = dict(seed)
+            selected["source_urls"] = [source["url"] for source in sources]
+            if errors:
+                log.warning(
+                    "Topic seed %s has %d inaccessible citation(s); proceeding with %d fetched source(s)",
+                    seed["id"], len(errors), len(sources),
+                )
+            return selected, sources, errors
+        excluded.add(signature)
+        log.warning("Skipping topic seed %s before generation: all cited sources are inaccessible", seed["id"])
 
 def load_topic_history() -> list[dict[str, Any]]:
     try:
@@ -571,13 +565,15 @@ SYSTEM_PROMPT = textwrap.dedent(
     {
       "category": "اختر فئة واحدة فقط بالضبط من هذه القائمة (انسخ النص كما هو): غرائب دينية موثقة / عجائب عالم الحيوان / غرائب جسم الإنسان والطب / حقائق علمية صادمة / أسرار الفضاء والمحيطات / ظواهر طبيعية نادرة / قصص تاريخية غريبة / حضارات وعادات وثقافات غير مألوفة / اختراعات وظواهر تقنية / أماكن غامضة / حقائق نفسية واجتماعية — بشرط ألا تكون من الفئات الممنوعة المذكورة في رسالة المستخدم",
       "hook_text": "سؤال واحد فقط، غريب وغير متوقع ومثير للفضول، بالعربية الفصحى المبسطة، يُفتتح به الفيديو. يجب أن يُصاغ حرفياً كسؤال ينتهي بعلامة استفهام (؟)، ولا يكشف الإجابة إطلاقاً، ولا يتجاوز 12 كلمة. الهدف الوحيد منه أن يجعل المشاهد غير قادر على تجاوز الفيديو قبل معرفة الإجابة. شكّله تشكيلاً كاملاً على كل حرف (لا تشكيلاً جزئياً) — التشكيل لن يظهر في الترجمة المعروضة على الشاشة، فقط يضبط نطق صوت التعليق",
-      "narration_script": "السكريبت الكامل الذي سيُروى بصوت التعليق ويظهر كترجمة على الفيديو (بعد حذف التشكيل من نسخة الترجمة فقط — انظر تعليمات التشكيل أدناه). يبدأ بـ hook_text حرفياً ثم يجيب عنه بتفاصيل موثوقة ومثيرة في فقرات مترابطة، وينتهي بخاتمة قصيرة. هذا الحقل وحده (شاملاً hook_text) يجب أن يحتوي من 120 إلى 165 كلمة عربية، ويجب أن يكون قريباً من 140 كلمة من أول استجابة. مقسم إلى جمل قصيرة واضحة، ومشكَّل تشكيلاً كاملاً على كل حرف.",
+      "narration_script": "السكريبت الكامل الذي سيُروى بصوت التعليق ويظهر كترجمة على الفيديو (بعد حذف التشكيل من نسخة الترجمة فقط — انظر تعليمات التشكيل أدناه). يبدأ بـ hook_text حرفياً ثم يجيب عنه بتفاصيل موثوقة ومثيرة في فقرات مترابطة، وينتهي عند اكتمال الشرح دون خاتمة دعائية أو طلب تفاعل. طول هذا الحقل قبل عبارة الإغلاق الثابتة التي يضيفها البرنامج يكون ضمن النطاق المحدد في رسالة المستخدم، ومقسَّم إلى جمل قصيرة واضحة ومشكَّل تشكيلاً كاملاً على كل حرف.",
       "title": "عنوان جذاب قصير بالعربية",
       "caption": "كابشن للمنشور بالعربية، 1-3 جمل",
       "hashtags": ["#وسم1", "#وسم2", "#وسم3", "#وسم4", "#وسم5"],
       "search_keywords_en": "SHORT general-subject phrase in 2-3 simple English words ONLY (e.g. 'ancient egypt', 'deep ocean', 'human brain sleep'). Never a comma-separated list of synonyms (e.g. NEVER 'human sleep, prolonged sleep, hypersomnia') — this exact string is prefixed to every scene search below, so a long or repetitive value makes all scene searches look identical to the stock-video engine and return duplicate clips.",
       "scene_keywords_en": ["10-14 English stock-footage search phrases, one per visual scene, in the exact order of the narration. Each phrase MUST name a concrete, filmable subject that is actually mentioned in that part of the script (a specific animal, place, object, body part, or activity) — never a vague abstract word like 'mystery', 'ancient', or 'nature' on its own, since stock sites match those to random unrelated footage. Start each phrase with the topic's general subject (e.g. 'ancient egypt', 'deep ocean', 'human brain') then add the specific visual detail."]
     }
+
+    لا تكتب أي دعوة للمشاهد للإعجاب أو المشاركة أو الاشتراك، ولا تضف عبارة ختامية تفاعلية داخل narration_script؛ سيُلحق البرنامج بعده العبارة الثابتة التي اختارها المستخدم.
 
     تعليمات إلزامية بخصوص الهوك (لا تتجاهلها إطلاقاً — هذا أهم جزء في الفيديو كله؛
     فحتى الآن الهوكات المُنتَجة ضعيفة ولا تمنع المشاهد من الاستمرار في التمرير، وهذا
@@ -789,8 +785,8 @@ PROOFREAD_SYSTEM_PROMPT = textwrap.dedent(
     4) لا تضف أرقاماً أو أسماء أو نتائج إلا إذا كانت لازمة ومعلومة موثوقة؛
        عند الشك استخدم صياغة تحفظية مثل "تُشير التقارير" أو احذف التفصيل.
     5) حافظ على سؤال البداية وفكرة الموضوع ما لم تكن الفكرة نفسها خاطئة؛ عند
-       خطأ الفكرة، استبدلها بتصحيح علمي جذاب لا بمعلومة مختلقة. اختم بخاتمة
-       قصيرة سليمة، ولا تضف دعوة تفاعل جديدة إذا كانت موجودة بالفعل.
+       خطأ الفكرة، استبدلها بتصحيح علمي جذاب لا بمعلومة مختلقة. اترك النص ينتهي
+       بعد اكتمال الشرح، ولا تضف أي خاتمة تفاعلية أو دعوة للإعجاب أو المشاركة.
     6) ضع التشكيل الكامل المناسب للنطق، لكن لا تجعل التشكيل يغطي خطأً لغوياً؛
        صحة الكلمات والمعنى أولاً.
     7) إذا وُجد مفتاح issues_to_fix في الرسالة فأصلح كل مشكلة مذكورة فيه صراحةً:
@@ -870,9 +866,9 @@ def proofread_narration_tashkeel(script: str, issues: list[str] | None = None) -
 # requested 120-165 (ideally ~140) word count by 20-40 words, and the only
 # corrective mechanisms that existed were (1) retrying topic generation from
 # scratch, which has the same odds of coming up short again, and (2)
-# appending the fixed CTA outro (see CTA_OUTRO_VARIANTS), which only ever
-# adds OUTRO_MIN_WORDS-OUTRO_MAX_WORDS (~28-33) words — nowhere near enough
-# to cover a 100-word draft. expand_narration_script() closes that gap
+# appending the fixed CTA outro (see CTA_OUTRO), which adds only its exact
+# word count — nowhere near enough to cover a 100-word draft.
+# expand_narration_script() closes that gap
 # directly: it sends the short script back to Groq with instructions to ONLY
 # add extra sentences (never reword or shorten what's already there) until
 # it reaches a safe target length, before the CTA outro is appended on top.
@@ -886,7 +882,8 @@ EXPAND_SYSTEM_PROMPT = textwrap.dedent(
     ممنوع منعاً باتاً: حذف أي كلمة من النص الأصلي، أو إعادة صياغة أي جملة
     موجودة بالفعل، أو تكرار معلومة وردت فيه، أو تغيير سؤال الافتتاح (أول
     جملة) أو المعنى العام للنص. النص الأصلي بالكامل يجب أن يظهر داخل النص
-    النهائي دون أي تعديل، والإضافة الجديدة فقط هي الفرق بينهما.
+    النهائي دون أي تعديل، والإضافة الجديدة فقط هي الفرق بينهما. لا تضف أي دعوة
+    للإعجاب أو المشاركة أو الاشتراك؛ سيُلحق البرنامج العبارة الثابتة بعد النص.
 
     أضف الجملة/الجملتين الجديدتين في أنسب موضع (عادة قبل آخر جملة في النص)،
     مع تشكيل كامل على كل حرف بنفس معايير التشكيل المستخدمة في بقية النص
@@ -960,8 +957,11 @@ def expand_narration_script(script: str, target_min_words: int) -> str:
     return expanded
 
 
-def generate_topic() -> Topic:
+def generate_topic() -> tuple[Topic, list[dict[str, str]], list[dict[str, str]]]:
     log.info("Generating viral topic via Groq (%s)...", GROQ_MODEL)
+    prefetched_sources: list[dict[str, str]] = []
+    preflight_source_errors: list[dict[str, str]] = []
+    excluded_source_signatures: set[tuple[str, ...]] = set()
 
     def _parse_topic(raw_text: str) -> tuple[Topic, int]:
         parsed = extract_json_block(raw_text)
@@ -1000,10 +1000,16 @@ def generate_topic() -> Topic:
         # of defaulting to whichever category is easiest (usually space/science),
         # which is what caused the low topic-variety Ahmed flagged.
         recent_categories = [h.get("category", "") for h in history[-5:] if h.get("category")]
-        seed = choose_topic_seed(history, set(recent_categories[-2:]))
+        nonlocal prefetched_sources, preflight_source_errors
+        seed, prefetched_sources, preflight_source_errors = choose_reachable_topic_seed(
+            history,
+            set(recent_categories[-2:]),
+            excluded_source_signatures,
+        )
         user_msg = (
             "أعطني فكرة فيديو جديدة بصيغة JSON كما هو محدد. "
-            f"يجب أن يكون narration_script بين {MIN_SCRIPT_WORDS} و{MAX_SCRIPT_WORDS} كلمة، "
+            f"يجب أن يكون narration_script قبل عبارة الإغلاق الثابتة بين "
+            f"{MIN_SCRIPT_WORDS - OUTRO_MIN_WORDS} و{MAX_SCRIPT_WORDS - OUTRO_MAX_WORDS} كلمة، "
             "ويجب أن يحتوي scene_keywords_en على 4 إلى 7 مشاهد مرتبطة مباشرة بفقرات النص. "
             "لا تكرر أياً من الموضوعات السابقة التالية: "
             + json.dumps([x.get("title", "") for x in history[-40:]], ensure_ascii=False)
@@ -1035,11 +1041,9 @@ def generate_topic() -> Topic:
         # MIN_SCRIPT_WORDS/MAX_SCRIPT_WORDS bound the FINAL script — Groq's
         # narration plus the fixed CTA outro appended below — since that
         # combined text is what actually gets spoken/subtitled. Trimming or
-        # expanding the pre-outro draft has to leave room for whichever
-        # outro variant random.choice() ends up picking: OUTRO_MAX_WORDS for
-        # the trim ceiling and OUTRO_MIN_WORDS for the expansion floor keep
-        # the final total safely inside MIN_SCRIPT_WORDS..MAX_SCRIPT_WORDS
-        # either way.
+        # expanding the pre-outro draft has to leave room for the fixed CTA;
+        # its exact word count keeps the final total safely inside
+        # MIN_SCRIPT_WORDS..MAX_SCRIPT_WORDS.
         pre_outro_max = MAX_SCRIPT_WORDS - OUTRO_MAX_WORDS
         pre_outro_min = MIN_SCRIPT_WORDS - OUTRO_MIN_WORDS
 
@@ -1051,39 +1055,36 @@ def generate_topic() -> Topic:
             )
             topic.narration_script = _trim_script_to_word_limit(topic.narration_script, pre_outro_max)
             word_count = len(topic.narration_script.split())
-        elif word_count < pre_outro_min:
+        elif word_count < pre_outro_min + 5:
             # This is the actual fix for the recurring "Groq output was too
             # short" failure: a script this far under target used to just
             # get a warning and the fixed CTA outro appended on top, which
-            # can only ever add OUTRO_MIN_WORDS-OUTRO_MAX_WORDS (~28-33)
-            # words — nowhere near enough when Groq hands back ~100 words
+            # adds only its fixed word count — nowhere near enough when
+            # Groq hands back ~100 words
             # instead of the requested ~140. Actively expand it first
             # instead of hoping. A few extra words of margin (+5) are
             # requested on top of pre_outro_min so the final total isn't
             # left sitting right on the edge of MIN_SCRIPT_WORDS.
             log.warning(
-                "narration_script short (%d words, need >=%d before the outro); asking Groq to "
+                "narration_script short (%d words, target >=%d before the outro); asking Groq to "
                 "expand it instead of relying on the outro alone",
-                word_count, pre_outro_min,
+                word_count, pre_outro_min + 5,
             )
             topic.narration_script = expand_narration_script(topic.narration_script, pre_outro_min + 5)
             word_count = len(topic.narration_script.split())
 
-        # Always close every video with exactly one of the fixed
-        # subscribe/like/comment/bell outros (see CTA_OUTRO_VARIANTS) — not
-        # only when the script came up short, so this reliably shows up on
-        # every published video, and never with two outros stacked together.
-        topic.narration_script = _append_engagement_outro(topic.narration_script, MIN_SCRIPT_WORDS)
-        word_count = len(topic.narration_script.split())
-        if word_count < MIN_SCRIPT_WORDS:
+        # Account for the fixed closing phrase in the final video duration,
+        # but append it only after text proofreading/cleanup in the pipeline.
+        final_word_count = word_count + OUTRO_MIN_WORDS
+        if not MIN_SCRIPT_WORDS <= final_word_count <= MAX_SCRIPT_WORDS:
             # Should be rare now that a short draft is actively expanded
             # above — this stays only as a last-resort safety net (e.g. the
-            # expansion pass itself failed) so an under-length video is
+            # expansion pass itself failed) so an under/over-length video is
             # never published silently. with_retries below still picks this
             # up as one more topic-generation attempt.
             raise PipelineError(
-                f"narration_script only {word_count} words even after expansion and the "
-                "engagement outro; Groq output was too short"
+                f"narration_script plus the fixed outro would be {final_word_count} words; "
+                f"allowed range is {MIN_SCRIPT_WORDS}..{MAX_SCRIPT_WORDS}"
             )
 
         if len(topic.scene_keywords_en) < MIN_SCENE_CLIPS:
@@ -1100,11 +1101,12 @@ def generate_topic() -> Topic:
         return topic
 
     topic = with_retries(_call, what="Groq topic generation", max_retries=TOPIC_GENERATION_MAX_ATTEMPTS)
+    final_word_count = len(topic.narration_script.split()) + OUTRO_MIN_WORDS
     log.info(
         "Topic generated: %s (%d-word script, ~%.0fs at 1.75 words/sec)",
-        topic.title, len(topic.narration_script.split()), len(topic.narration_script.split()) / 1.75,
+        topic.title, final_word_count, final_word_count / 1.75,
     )
-    return topic
+    return topic, prefetched_sources, preflight_source_errors
 
 
 # ---------------------------------------------------------------------------
@@ -1514,7 +1516,7 @@ def normalize_narration_duration(audio_path: Path, target_seconds: float) -> flo
 # and build_subtitles used to trust those numbers directly. In production
 # this drifted badly: Azure's Arabic neural voices do not report per-word
 # timing reliably, and the more tashkeel the input text carries (needed for
-# correct pronunciation — see CTA_OUTRO_VARIANTS / SYSTEM_PROMPT), the more
+# correct pronunciation — see CTA_OUTRO / SYSTEM_PROMPT), the more
 # those self-reported boundaries can be off, with the error compounding
 # over a ~90-second video until the captions are visibly out of sync with
 # what's actually being said.
@@ -2230,7 +2232,7 @@ def run_pipeline() -> None:
     run_dir.mkdir(parents=True, exist_ok=True)
     log.info("Run directory: %s", run_dir)
 
-    topic = generate_topic()
+    topic, prefetched_sources, preflight_source_errors = generate_topic()
 
     # Stage 1 tashkeel QA (see the block comment above
     # proofread_narration_tashkeel) — runs BEFORE anything is recorded, so
@@ -2242,6 +2244,15 @@ def run_pipeline() -> None:
         topic.narration_script,
         reviser=lambda text, issues: proofread_narration_tashkeel(text, issues=issues),
     )
+    # Proofreading is intentionally complete before appending the fixed CTA,
+    # so no language model can rewrite, shorten, or remove the user's exact words.
+    topic.narration_script = _append_engagement_outro(topic.narration_script)
+    final_word_count = len(topic.narration_script.split())
+    if not MIN_SCRIPT_WORDS <= final_word_count <= MAX_SCRIPT_WORDS:
+        raise PipelineError(
+            f"Final narration is {final_word_count} words; allowed range is "
+            f"{MIN_SCRIPT_WORDS}..{MAX_SCRIPT_WORDS} after proofreading and the fixed outro"
+        )
     red_flag = find_content_red_flag(topic.narration_script)
     if red_flag:
         raise PipelineError(f"Rejected hallucinated or nonstandard content term: {red_flag}")
@@ -2249,7 +2260,12 @@ def run_pipeline() -> None:
     # Hard publication gate: no TTS, video assembly, release upload, or
     # Buffer request may happen until every extracted scientific claim is
     # supported by an allow-listed source at the configured confidence.
-    fact_report = fact_check_topic(topic, run_dir / "fact_check.json")
+    fact_report = fact_check_topic(
+        topic,
+        run_dir / "fact_check.json",
+        prefetched_sources=prefetched_sources,
+        preflight_source_errors=preflight_source_errors,
+    )
     if fact_report.get("status") != "PASS":
         raise PipelineError(
             "Fact Check rejected the final script; audio and publishing are blocked. "

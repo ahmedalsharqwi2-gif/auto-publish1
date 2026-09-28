@@ -32,6 +32,7 @@ FETCH_TIMEOUT = float(os.getenv("FACT_CHECK_FETCH_TIMEOUT", "20"))
 MAX_SOURCE_CHARS = int(os.getenv("FACT_CHECK_MAX_SOURCE_CHARS", "24000"))
 MAX_TOTAL_SOURCE_CHARS = int(os.getenv("FACT_CHECK_MAX_TOTAL_SOURCE_CHARS", "50000"))
 USER_AGENT = "auto-publish1-fact-check/1.0 (+https://github.com/ahmedalsharqwi2-gif/auto-publish1)"
+_SOURCE_CACHE: dict[tuple[str, tuple[str, ...]], dict[str, str]] = {}
 
 
 class FactCheckError(RuntimeError):
@@ -93,6 +94,9 @@ def fetch_source(url: str, allowed_domains: list[str]) -> dict[str, str]:
     url = _clean_url(url)
     if not _allowed_url(url, allowed_domains):
         raise FactCheckError(f"Source domain is not allow-listed: {url}")
+    cache_key = (url, tuple(sorted(set(allowed_domains))))
+    if cache_key in _SOURCE_CACHE:
+        return dict(_SOURCE_CACHE[cache_key])
     response = requests.get(
         url,
         headers={"User-Agent": USER_AGENT, "Accept": "text/html,application/xhtml+xml"},
@@ -104,7 +108,26 @@ def fetch_source(url: str, allowed_domains: list[str]) -> dict[str, str]:
     text = re.sub(r"\s+", " ", " ".join(parser.parts)).strip()
     if len(text) < 300:
         raise FactCheckError(f"Source returned too little readable text: {url}")
-    return {"url": url, "text": text[:MAX_SOURCE_CHARS]}
+    result = {"url": url, "text": text[:MAX_SOURCE_CHARS]}
+    _SOURCE_CACHE[cache_key] = result
+    return dict(result)
+
+
+def preflight_topic_sources(
+    urls: list[str], allowed_domains: list[str] | None = None
+) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+    """Fetch a topic's evidence before expensive generation; return successes and failures."""
+    domains = allowed_domains if allowed_domains is not None else _load_config()["allowed_domains"]
+    sources: list[dict[str, str]] = []
+    errors: list[dict[str, str]] = []
+    for raw_url in urls:
+        url = str(raw_url)
+        try:
+            sources.append(fetch_source(url, domains))
+        except Exception as exc:
+            errors.append({"url": url, "error": str(exc)})
+            log.warning("Topic source preflight failed: %s — %s", url, exc)
+    return sources, errors
 
 
 def _topic_value(topic: Any, key: str, default: Any = "") -> Any:
@@ -205,7 +228,12 @@ supported يتطلب دليلاً واضحًا في المصدر. contradicted �
     )
 
 
-def fact_check_topic(topic: Any, output_path: Path | None = None) -> dict[str, Any]:
+def fact_check_topic(
+    topic: Any,
+    output_path: Path | None = None,
+    prefetched_sources: list[dict[str, str]] | None = None,
+    preflight_source_errors: list[dict[str, str]] | None = None,
+) -> dict[str, Any]:
     """Fact-check a final Topic and return a report; never silently passes errors."""
     report: dict[str, Any] = {
         "status": "REJECT",
@@ -234,13 +262,24 @@ def fact_check_topic(topic: Any, output_path: Path | None = None) -> dict[str, A
             ) if part
         )
         sources: list[dict[str, str]] = []
-        source_fetch_errors: list[dict[str, str]] = []
-        for url in urls:
-            try:
-                sources.append(fetch_source(url, config["allowed_domains"]))
-            except Exception as exc:
-                source_fetch_errors.append({"url": url, "error": str(exc)})
-                log.warning("Fact Check source unavailable; trying remaining sources: %s — %s", url, exc)
+        source_fetch_errors: list[dict[str, str]] = list(preflight_source_errors or [])
+        if prefetched_sources is not None:
+            allowed_topic_urls = {_clean_url(url) for url in urls}
+            for item in prefetched_sources:
+                source_url = _clean_url(str(item.get("url", "")))
+                source_text = str(item.get("text", "")).strip()
+                if source_url not in allowed_topic_urls or not _allowed_url(source_url, config["allowed_domains"]):
+                    raise FactCheckError(f"Invalid preflight evidence URL: {source_url}")
+                if len(source_text) < 300:
+                    raise FactCheckError(f"Preflight evidence contains too little readable text: {source_url}")
+                sources.append({"url": source_url, "text": source_text[:MAX_SOURCE_CHARS]})
+        else:
+            for url in urls:
+                try:
+                    sources.append(fetch_source(url, config["allowed_domains"]))
+                except Exception as exc:
+                    source_fetch_errors.append({"url": url, "error": str(exc)})
+                    log.warning("Fact Check source unavailable; trying remaining sources: %s — %s", url, exc)
         report["source_fetch_errors"] = source_fetch_errors
         report["sources_fetched"] = [source["url"] for source in sources]
         if not sources:

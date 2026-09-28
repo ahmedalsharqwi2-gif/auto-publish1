@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 import requests
 
-from fact_check import fact_check_topic
+from fact_check import fact_check_topic, preflight_topic_sources
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -62,6 +62,50 @@ class FactCheckSourceFallbackTests(unittest.TestCase):
         self.assertEqual(len(report["source_fetch_errors"]), 2)
         self.assertIn("No accessible Fact Check sources", report["errors"][0])
         extract_claims.assert_not_called()
+
+    def test_prefetched_evidence_is_reused_without_refetching(self):
+        source = {
+            "url": self.topic["source_urls"][1],
+            "text": "official evidence " + ("supporting details " * 30),
+        }
+        verdict = {
+            "claims": [{
+                "claim": "A supported scientific claim.",
+                "verdict": "supported",
+                "confidence": 0.95,
+                "evidence_quote": "official evidence",
+                "source_url": source["url"],
+                "reason": "Directly supported.",
+            }],
+            "overall_reason": "Supported by preflighted evidence.",
+        }
+        with (
+            patch("fact_check._load_config", return_value=self.config),
+            patch("fact_check.fetch_source") as fetch,
+            patch("fact_check._extract_claims", return_value=[{"claim": "A supported scientific claim."}]),
+            patch("fact_check._judge_claims", return_value=verdict),
+        ):
+            report = fact_check_topic(
+                self.topic,
+                prefetched_sources=[source],
+                preflight_source_errors=[{"url": self.topic["source_urls"][0], "error": "403 Forbidden"}],
+            )
+
+        fetch.assert_not_called()
+        self.assertEqual(report["status"], "PASS")
+        self.assertEqual(report["sources_fetched"], [source["url"]])
+        self.assertEqual(len(report["source_fetch_errors"]), 1)
+
+    def test_preflight_returns_usable_sources_and_structured_failures(self):
+        good = {"url": self.topic["source_urls"][1], "text": "x" * 350}
+        with (
+            patch("fact_check._load_config", return_value=self.config),
+            patch("fact_check.fetch_source", side_effect=[requests.HTTPError("403 Forbidden"), good]),
+        ):
+            sources, errors = preflight_topic_sources(self.topic["source_urls"])
+
+        self.assertEqual(sources, [good])
+        self.assertEqual(errors, [{"url": self.topic["source_urls"][0], "error": "403 Forbidden"}])
 
 
 class SpecificNOAASourceTests(unittest.TestCase):
