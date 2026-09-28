@@ -1,0 +1,22 @@
+# Runtime output and generated media
+work/
+output/
+*.mp4
+*.ass
+*.normalized.mp3
+*.try*.mp3
+
+# Python cache and local environments
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Local secrets and tooling files
+.env
+.env.*
+!.env.example
+.vscode/
+.idea/
+.DS_Store
