@@ -279,5 +279,13 @@
     "search_keywords_en": "human heart",
     "category": "غرائب جسم الإنسان والطب",
     "created_at": "2026-09-28T11:33:38Z"
+  },
+  {
+    "title": "نسبة تغطية المحيطات للأرض",
+    "hook_text": "كم نسبة تغطية المحيطات لسطح الأرض؟",
+    "search_keywords_en": "ocean coverage",
+    "category": "أسرار الفضاء والمحيطات",
+    "bank_id": "earth_02_01",
+    "created_at": "2026-09-28T17:33:00Z"
   }
 ]
