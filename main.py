@@ -666,12 +666,30 @@ def _proofread_topic_narration(topic: Topic, script: str) -> str:
     This is safe because fact_check_topic() still runs afterwards and blocks
     publishing of anything it cannot support from Wikipedia.
     """
+    minimum_pre_outro_words = max(MIN_SCRIPT_WORDS - OUTRO_MIN_WORDS, 1)
+
+    def keep_minimum_length(candidate: str) -> str:
+        candidate_words = len(candidate.split())
+        if candidate_words >= minimum_pre_outro_words:
+            return candidate
+        original_words = len(script.split())
+        if original_words >= minimum_pre_outro_words:
+            log.warning(
+                "Editorial review shortened narration below the minimum "
+                "(%d -> %d words); keeping the original script",
+                original_words,
+                candidate_words,
+            )
+            return script
+        return candidate
+
     try:
         corrected = proofread_narration_tashkeel(
             script,
             canonical_subject=topic.title,
             verified_fact=topic.verified_fact or None,
         )
+        corrected = keep_minimum_length(corrected)
         return enforce_text_quality(
             corrected,
             reviser=lambda text, issues: proofread_narration_tashkeel(
@@ -682,7 +700,7 @@ def _proofread_topic_narration(topic: Topic, script: str) -> str:
         )
     except PipelineError as exc:
         log.warning("Editorial review failed (%s); continuing with the original script", exc)
-        return script
+        return keep_minimum_length(script)
 
 
 # ---------------------------------------------------------------------------

@@ -3,9 +3,12 @@ import unittest
 from unittest.mock import patch
 
 from main import (
+    MIN_SCRIPT_WORDS,
+    OUTRO_MIN_WORDS,
     PipelineError,
     SYSTEM_PROMPT,
     Topic,
+    _proofread_topic_narration,
     generate_topic,
     proofread_narration_tashkeel,
 )
@@ -43,6 +46,22 @@ class CurrentTopicAndEditorialTests(unittest.TestCase):
             self.assertRaisesRegex(PipelineError, "changed script length too much"),
         ):
             proofread_narration_tashkeel(script)
+
+    def test_short_editorial_rewrite_keeps_original_minimum_length_script(self):
+        original = "حَقِيقَةٌ " * (MIN_SCRIPT_WORDS - OUTRO_MIN_WORDS)
+        shortened = "حَقِيقَةٌ " * 90
+        topic = Topic(
+            hook_text="مَا هَذِهِ الحَقِيقَةُ؟",
+            narration_script=original,
+            title="موضوع",
+            caption="شرح",
+        )
+        with (
+            patch("main.proofread_narration_tashkeel", return_value=shortened),
+            patch("main.enforce_text_quality", side_effect=lambda text, reviser: text),
+        ):
+            result = _proofread_topic_narration(topic, original)
+        self.assertEqual(result, original)
 
     def test_generate_topic_normalizes_model_output(self):
         hook = "كَيْفَ يَعْمَلُ البَرْقُ؟"
