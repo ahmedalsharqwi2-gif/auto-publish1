@@ -68,9 +68,9 @@ jobs:
 
       - name: Generate and publish
         env:
-          # >>> MODIFIED: OpenRouter replaces Groq (Llama 3.3 70B free tier)
+          # OpenRouter with free router (auto-selects best available free model)
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          OPENROUTER_MODEL: 'meta-llama/llama-3.3-70b-instruct:free'
+          OPENROUTER_MODEL: 'openrouter/free'
           OPENROUTER_TITLE: 'Auto Publish Reels'
 
           PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
@@ -93,8 +93,7 @@ jobs:
           TOPIC_BANK_FILE: 'config/topic_bank.json'
           FACT_CHECK_SOURCES_FILE: 'config/fact_sources.json'
 
-          # >>> MODIFIED: fact_check.py must also be pointed at OpenRouter
-          FACT_CHECK_MODEL: 'meta-llama/llama-3.3-70b-instruct:free'
+          FACT_CHECK_MODEL: 'openrouter/free'
           FACT_CHECK_MIN_CONFIDENCE: '0.85'
           FACT_CHECK_MAX_SOURCE_CHARS: '6000'
           FACT_CHECK_MAX_TOTAL_SOURCE_CHARS: '8000'
