@@ -83,6 +83,7 @@ MIN_AUDIO_SECONDS = float(os.getenv("MIN_AUDIO_SECONDS", "60"))
 MAX_AUDIO_SECONDS = float(os.getenv("MAX_AUDIO_SECONDS", "90"))
 TARGET_AUDIO_SECONDS = float(os.getenv("TARGET_AUDIO_SECONDS", str(max(1.0, MAX_AUDIO_SECONDS - 1.0))))
 MAX_SCRIPT_WORDS = int(os.getenv("MAX_SCRIPT_WORDS", "165"))
+REQUIRE_EXTERNAL_SOURCES = os.getenv("REQUIRE_EXTERNAL_SOURCES", "false").lower() == "true"
 # Topic generation gets a larger retry budget than generic calls because
 # rate limits and malformed model responses can otherwise exhaust the run.
 TOPIC_GENERATION_MAX_ATTEMPTS = int(os.getenv("TOPIC_GENERATION_MAX_ATTEMPTS", "5"))
@@ -477,10 +478,18 @@ def choose_reachable_topic_seed(
     blocked_categories: set[str] | None = None,
     excluded_source_signatures: set[tuple[str, ...]] | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, str]], list[dict[str, str]]]:
-    """Choose a seed only after at least one of its allow-listed sources is fetched."""
+    """Choose a seed; external citations are optional unless explicitly required."""
     excluded = excluded_source_signatures if excluded_source_signatures is not None else set()
     while True:
         seed = choose_topic_seed(history, blocked_categories, excluded)
+        if not REQUIRE_EXTERNAL_SOURCES:
+            selected = dict(seed)
+            selected["source_urls"] = []
+            log.info(
+                "Using vetted topic-bank fact for %s; external source fetching is disabled",
+                seed["id"],
+            )
+            return selected, [], []
         signature = _topic_source_signature(seed)
         sources, errors = preflight_topic_sources(list(seed.get("source_urls", [])))
         if sources:
@@ -492,6 +501,15 @@ def choose_reachable_topic_seed(
                     seed["id"], len(errors), len(sources),
                 )
             return selected, sources, errors
+        if not REQUIRE_EXTERNAL_SOURCES:
+            selected = dict(seed)
+            selected["source_urls"] = []
+            log.warning(
+                "Topic seed %s has no reachable external source; continuing with the vetted "
+                "topic-bank fact only",
+                seed["id"],
+            )
+            return selected, [], errors
         excluded.add(signature)
         log.warning("Skipping topic seed %s before generation: all cited sources are inaccessible", seed["id"])
 
@@ -837,7 +855,7 @@ def build_topic_user_prompt(seed: dict[str, Any], accessible_sources: list[dict[
     """Give Groq one fixed bank topic and only citations already fetched successfully."""
     source_urls = [str(source.get("url", "")).strip() for source in accessible_sources]
     source_urls = [url for url in source_urls if url]
-    if not source_urls:
+    if not source_urls and REQUIRE_EXTERNAL_SOURCES:
         raise PipelineError("Cannot write a topic without at least one preflighted source")
 
     pre_outro_max = MAX_SCRIPT_WORDS - OUTRO_MAX_WORDS
@@ -978,6 +996,27 @@ def _proofread_topic_narration(topic: Topic, script: str) -> str:
             canonical_subject=topic.title,
             verified_fact=topic.verified_fact,
         ),
+    )
+
+
+def _build_evidence_only_fallback(topic: Topic) -> None:
+    """Replace a rejected draft with text made only from the vetted bank fact.
+
+    This is deterministic rather than another model repair request, so the
+    recovery path cannot introduce a new unsupported detail. The fact-check
+    gate still has the final say before audio or publishing starts.
+    """
+    subject = topic.title.strip()
+    fact = topic.verified_fact.strip()
+    if not subject or not fact:
+        raise PipelineError("Cannot build evidence-only fallback without title and verified_fact")
+    topic.hook_text = f"مَا الحَقِيقَةُ المُوَثَّقَةُ عَنْ {subject}؟"
+    topic.narration_script = f"{topic.hook_text} {fact}".strip()
+    topic.caption = fact
+    topic.hashtags = []
+    log.warning(
+        "Fact Check rejected the generated draft; replaced it with an evidence-only script "
+        "from the vetted topic-bank fact and will re-check before publishing"
     )
 
 
@@ -2158,10 +2197,20 @@ def run_pipeline() -> None:
         preflight_source_errors=preflight_source_errors,
     )
     if fact_report.get("status") != "PASS":
-        raise PipelineError(
-            "Fact Check rejected the final script; audio and publishing are blocked. "
-            f"Details: {fact_report.get('errors', [])}"
+        _build_evidence_only_fallback(topic)
+        topic.narration_script = _append_engagement_outro(topic.narration_script)
+        fact_report = fact_check_topic(
+            topic,
+            run_dir / "fact_check.json",
+            prefetched_sources=prefetched_sources,
+            preflight_source_errors=preflight_source_errors,
         )
+        if fact_report.get("status") != "PASS":
+            raise PipelineError(
+                "Fact Check rejected both the generated script and the evidence-only fallback; "
+                "audio and publishing are blocked. "
+                f"Details: {fact_report.get('errors', [])}"
+            )
     log.info("Fact Check passed: %d supported claim(s)", len(fact_report.get("claims", [])))
 
     (run_dir / "topic.json").write_text(
