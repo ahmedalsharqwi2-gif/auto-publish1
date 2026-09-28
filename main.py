@@ -758,6 +758,9 @@ PROOFREAD_SYSTEM_PROMPT = textwrap.dedent(
        صحة الكلمات والمعنى أولاً.
     7) إذا وُجد مفتاح issues_to_fix في الرسالة فأصلح كل مشكلة مذكورة فيه صراحةً:
        احذف أي حرف غير عربي، وأكمل التشكيل الناقص على كل كلمة، واكتب الأرقام بالحروف.
+    8) راجع كل جملة نحويًا قبل إخراجها. ممنوع تركيب «إذا غير موجود ...»؛ اكتب «إذا لم يوجد/توجد ...».
+       وممنوع استعمال «رفع العمود» عندما يكون المقصود «ارتفاع العمود». لا تُخرج جملة
+       غير مكتملة أو عبارة تبدو مترجمة حرفيًا، حتى لو كان معناها العام مفهومًا.
 
     أجب حصراً بكائن JSON بمفتاح واحد:
     {"corrected_text": "النص العربي الكامل بعد المراجعة"}
@@ -2132,6 +2135,10 @@ def run_pipeline() -> None:
         if not raw_text:
             raise PipelineError("Dry-run input text is empty")
         corrected = proofread_narration_tashkeel(raw_text)
+        corrected = enforce_text_quality(
+            corrected,
+            reviser=lambda text, issues: proofread_narration_tashkeel(text, issues=issues),
+        )
         red_flag = find_content_red_flag(corrected)
         result = {
             "dry_run": True,

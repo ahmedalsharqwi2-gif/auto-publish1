@@ -40,6 +40,17 @@ MAX_SENTENCE_WORDS = int(os.getenv("MAX_SENTENCE_WORDS", "30"))
 MIN_TASHKEEL_COVERAGE_WARN = float(os.getenv("MIN_TASHKEEL_COVERAGE_WARN", "0.60"))
 MIN_TASHKEEL_COVERAGE_FATAL = float(os.getenv("MIN_TASHKEEL_COVERAGE_FATAL", "0.35"))
 
+# تراكيب ظهرت في مخرجات المراجعة الآلية وتدل غالبًا على خلل نحوي واضح.
+# تُسجّل كأخطاء حرجة حتى تُعاد مراجعتها قبل التسجيل أو النشر.
+_LANGUAGE_RED_FLAGS = (
+    (re.compile(r"\bإذا\s+غير\s+موجود(?:ة)?(?:\s+(?:ماء|شيء|سبب))?\b"),
+     "تركيب غير سليم: استخدم (إذا لم يوجد/توجد ...) بدل (إذا غير موجود ...)"),
+    (re.compile(r"(?:^|[،\s])رفع\s+العمود\b"),
+     "تركيب غير سليم في السياق: استخدم (ارتفاع العمود) لا (رفع العمود)"),
+    (re.compile(r"\bإذا\s+غير\s+موجود\s+ماء\b"),
+     "تركيب غير سليم: استخدم (إذا لم يوجد ماء)"),
+)
+
 
 class TextQualityError(Exception):
     """النص ما زال معيبًا بعد المراجعة — يُفضَّل إيقاف التشغيل على نشر نص سيئ."""
@@ -146,6 +157,9 @@ def find_text_problems(text: str) -> tuple[list[str], list[str]]:
     foreign = sorted({c for c in plain if c.isalpha() and not is_arabic_letter(c)})
     if foreign:
         fatal.append("يوجد حروف غير عربية داخل النص: " + " ".join(foreign[:10]))
+    for pattern, message in _LANGUAGE_RED_FLAGS:
+        if pattern.search(plain):
+            fatal.append(message)
 
     tokens = [w.strip("،.؟!؛:") for w in plain.split()]
     tokens = [t for t in tokens if t]
