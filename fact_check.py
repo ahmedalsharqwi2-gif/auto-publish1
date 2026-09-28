@@ -26,7 +26,13 @@ log = logging.getLogger("fact_check")
 
 DEFAULT_CONFIG = Path(os.getenv("FACT_CHECK_SOURCES_FILE", "config/fact_sources.json"))
 GROQ_ENDPOINT = os.getenv("GROQ_ENDPOINT", "https://api.groq.com/openai/v1/chat/completions")
-GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
+FACT_CHECK_MODEL = os.getenv(
+    "FACT_CHECK_MODEL",
+    os.getenv("GROQ_MODEL", "openai/gpt-oss-120b"),
+)
+STRICT_JSON_SCHEMA_MODELS = {
+    "openai/gpt-oss-120b",
+}
 GROQ_API_KEY = re.sub(r"\s+", "", os.getenv("GROQ_API_KEY", ""))
 MIN_CONFIDENCE = float(os.getenv("FACT_CHECK_MIN_CONFIDENCE", "0.85"))
 FETCH_TIMEOUT = float(os.getenv("FACT_CHECK_FETCH_TIMEOUT", "20"))
@@ -36,6 +42,55 @@ GROQ_RATE_LIMIT_MAX_RETRIES = max(0, int(os.getenv("FACT_CHECK_GROQ_MAX_RETRIES"
 FACT_CHECK_MAX_COMPLETION_TOKENS = max(256, int(os.getenv("FACT_CHECK_MAX_COMPLETION_TOKENS", "900")))
 USER_AGENT = "auto-publish1-fact-check/1.0 (+https://github.com/ahmedalsharqwi2-gif/auto-publish1)"
 _SOURCE_CACHE: dict[tuple[str, tuple[str, ...]], dict[str, str]] = {}
+CLAIM_EXTRACTION_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "claims": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "claim": {"type": "string"},
+                    "importance": {"type": "string", "enum": ["core", "supporting"]},
+                    "numeric": {"type": "boolean"},
+                },
+                "required": ["claim", "importance", "numeric"],
+                "additionalProperties": False,
+            },
+        }
+    },
+    "required": ["claims"],
+    "additionalProperties": False,
+}
+CLAIM_VERDICT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "claims": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "claim": {"type": "string"},
+                    "verdict": {
+                        "type": "string",
+                        "enum": ["supported", "contradicted", "uncertain", "unsupported"],
+                    },
+                    "confidence": {"type": "number"},
+                    "evidence_quote": {"type": "string"},
+                    "source_url": {"type": "string"},
+                    "reason": {"type": "string"},
+                },
+                "required": [
+                    "claim", "verdict", "confidence", "evidence_quote", "source_url", "reason"
+                ],
+                "additionalProperties": False,
+            },
+        },
+        "overall_reason": {"type": "string"},
+    },
+    "required": ["claims", "overall_reason"],
+    "additionalProperties": False,
+}
 
 
 class FactCheckError(RuntimeError):
@@ -195,21 +250,39 @@ def _groq_rate_limit_delay(response: requests.Response, attempt: int) -> float:
     return min(max(delay, 0.0) + 1.0, 120.0)
 
 
-def _groq_json(system: str, user: str, max_tokens: int = FACT_CHECK_MAX_COMPLETION_TOKENS) -> dict[str, Any]:
+def _groq_json(
+    system: str,
+    user: str,
+    *,
+    schema_name: str,
+    schema: dict[str, Any],
+    max_tokens: int = FACT_CHECK_MAX_COMPLETION_TOKENS,
+) -> dict[str, Any]:
     if not GROQ_API_KEY:
         raise FactCheckError("GROQ_API_KEY is missing; cannot run Fact Check")
+    if FACT_CHECK_MODEL not in STRICT_JSON_SCHEMA_MODELS:
+        raise FactCheckError(
+            f"Fact Check model {FACT_CHECK_MODEL!r} does not support Groq strict JSON Schema; "
+            f"choose one of {sorted(STRICT_JSON_SCHEMA_MODELS)}"
+        )
     payload = {
-        "model": GROQ_MODEL,
+        "model": FACT_CHECK_MODEL,
         "temperature": 0,
-        "max_tokens": max_tokens,
-        "response_format": {"type": "json_object"},
+        "max_completion_tokens": max_tokens,
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+                "name": schema_name,
+                "strict": True,
+                "schema": schema,
+            },
+        },
         "messages": [
             {"role": "system", "content": system},
             {"role": "user", "content": user},
         ],
     }
     rate_limit_retries = 0
-    json_mode_fallback_used = False
     while True:
         response = requests.post(
             GROQ_ENDPOINT,
@@ -231,7 +304,7 @@ def _groq_json(system: str, user: str, max_tokens: int = FACT_CHECK_MAX_COMPLETI
             )
             time.sleep(delay)
             continue
-        if response.status_code == 400 and not json_mode_fallback_used:
+        if response.status_code == 400:
             error_text = str(getattr(response, "text", ""))
             try:
                 error_body = response.json()
@@ -240,20 +313,10 @@ def _groq_json(system: str, user: str, max_tokens: int = FACT_CHECK_MAX_COMPLETI
             error = error_body.get("error", {}) if isinstance(error_body, dict) else {}
             error_code = error.get("code") if isinstance(error, dict) else None
             if error_code == "json_validate_failed" or "json_validate_failed" in error_text:
-                # Retry only this provider-side constrained-JSON failure in
-                # plain mode. _json_from_model still validates locally, and
-                # malformed output continues to fail closed before publishing.
-                payload.pop("response_format", None)
-                payload["messages"][0]["content"] += (
-                    "\n\nأخرج كائن JSON صالحًا فقط، بلا Markdown أو نص خارجه. "
-                    "سيتم تحليله والتحقق منه محليًا."
+                raise FactCheckError(
+                    f"Groq rejected strict Fact Check JSON Schema {schema_name!r}; "
+                    f"refusing an unconstrained text fallback: {error_text[:500]}"
                 )
-                json_mode_fallback_used = True
-                log.warning(
-                    "Groq rejected constrained JSON output (json_validate_failed); "
-                    "retrying once with local JSON validation"
-                )
-                continue
         if response.status_code != 200:
             raise FactCheckError(f"Groq Fact Check request failed ({response.status_code}): {response.text[:500]}")
         break
@@ -272,22 +335,31 @@ def _extract_claims(script: str, verified_fact: str) -> list[dict[str, Any]]:
 importance يجب أن تكون core أو supporting، وnumeric قيمة منطقية true أو false.
         لا تعتبر الدعوة إلى المتابعة أو الأسلوب البلاغي ادعاءً علميًا.""",
         json.dumps({"verified_fact": verified_fact, "script": script}, ensure_ascii=False),
+        schema_name="fact_check_claims",
+        schema=CLAIM_EXTRACTION_SCHEMA,
         max_tokens=700,
     )
     claims = result.get("claims", [])
     if not isinstance(claims, list) or not claims:
         raise FactCheckError("No verifiable claims were extracted from the script")
     clean: list[dict[str, Any]] = []
-    for item in claims:
-        if not isinstance(item, dict) or not str(item.get("claim", "")).strip():
-            continue
+    for index, item in enumerate(claims):
+        if not isinstance(item, dict):
+            raise FactCheckError(f"Extracted claim {index + 1} is not an object")
+        claim = str(item.get("claim", "")).strip()
+        importance = item.get("importance")
+        numeric = item.get("numeric")
+        if not claim:
+            raise FactCheckError(f"Extracted claim {index + 1} is empty")
+        if not isinstance(importance, str) or importance not in {"core", "supporting"}:
+            raise FactCheckError(f"Extracted claim {index + 1} has invalid importance: {importance!r}")
+        if not isinstance(numeric, bool):
+            raise FactCheckError(f"Extracted claim {index + 1} has a non-boolean numeric flag")
         clean.append({
-            "claim": str(item["claim"]).strip(),
-            "importance": str(item.get("importance", "supporting")),
-            "numeric": bool(item.get("numeric", False)),
+            "claim": claim,
+            "importance": importance,
+            "numeric": numeric,
         })
-    if not clean:
-        raise FactCheckError("The extracted claim list was empty")
     return clean
 
 
@@ -313,6 +385,8 @@ supported يتطلب دليلاً واضحًا في المصدر. contradicted �
             "claims": claims,
             "sources": evidence,
         }, ensure_ascii=False),
+        schema_name="fact_check_verdicts",
+        schema=CLAIM_VERDICT_SCHEMA,
         max_tokens=FACT_CHECK_MAX_COMPLETION_TOKENS,
     )
 

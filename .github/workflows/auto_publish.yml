@@ -90,6 +90,7 @@ jobs:
           TOPIC_HISTORY_FILE: 'topic_history.json'
           TOPIC_BANK_FILE: 'config/topic_bank.json'
           FACT_CHECK_SOURCES_FILE: 'config/fact_sources.json'
+          FACT_CHECK_MODEL: 'openai/gpt-oss-120b'
           FACT_CHECK_MIN_CONFIDENCE: '0.85'
           FACT_CHECK_MAX_SOURCE_CHARS: '6000'
           FACT_CHECK_MAX_TOTAL_SOURCE_CHARS: '8000'

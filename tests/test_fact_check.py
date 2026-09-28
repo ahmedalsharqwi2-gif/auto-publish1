@@ -6,7 +6,18 @@ from unittest.mock import patch
 
 import requests
 
-from fact_check import MAX_TOTAL_SOURCE_CHARS, FactCheckError, _groq_json, fact_check_topic, fetch_source, preflight_topic_sources
+from fact_check import (
+    CLAIM_EXTRACTION_SCHEMA,
+    CLAIM_VERDICT_SCHEMA,
+    MAX_TOTAL_SOURCE_CHARS,
+    FactCheckError,
+    _extract_claims,
+    _groq_json,
+    _judge_claims,
+    fact_check_topic,
+    fetch_source,
+    preflight_topic_sources,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -155,47 +166,85 @@ class GroqRateLimitRetryTests(unittest.TestCase):
             patch("fact_check.requests.post", side_effect=[limited, success]) as post,
             patch("fact_check.time.sleep") as sleep,
         ):
-            result = _groq_json("system", "user", max_tokens=700)
+            result = _groq_json(
+                "system",
+                "user",
+                schema_name="test_claims",
+                schema=CLAIM_EXTRACTION_SCHEMA,
+                max_tokens=700,
+            )
 
         self.assertEqual(result, {"claims": []})
         self.assertEqual(post.call_count, 2)
         self.assertAlmostEqual(sleep.call_args.args[0], 10.5925)
-        self.assertEqual(post.call_args_list[0].kwargs["json"]["max_tokens"], 700)
+        self.assertEqual(post.call_args_list[0].kwargs["json"]["max_completion_tokens"], 700)
 
-    def test_json_validation_400_retries_once_without_constrained_mode(self):
-        invalid_json_mode = SimpleNamespace(
-            status_code=400,
-            headers={},
-            text='{"error":{"code":"json_validate_failed"}}',
-            json=lambda: {"error": {"code": "json_validate_failed"}},
-        )
+    def test_strict_json_schema_is_sent_for_constrained_decoding(self):
         success = SimpleNamespace(
             status_code=200,
             headers={},
             text="",
             json=lambda: {"choices": [{"message": {"content": '{"claims": []}'}}]},
         )
-        submitted_payloads = []
-        responses = iter([invalid_json_mode, success])
-
-        def capture_post(*args, **kwargs):
-            submitted_payloads.append(json.loads(json.dumps(kwargs["json"])))
-            return next(responses)
-
         with (
             patch("fact_check.GROQ_API_KEY", "test-key"),
-            patch("fact_check.requests.post", side_effect=capture_post) as post,
+            patch("fact_check.requests.post", return_value=success) as post,
         ):
-            result = _groq_json("extract claims", "script", max_tokens=700)
+            result = _groq_json(
+                "extract claims",
+                "script",
+                schema_name="test_claims",
+                schema=CLAIM_EXTRACTION_SCHEMA,
+                max_tokens=700,
+            )
 
         self.assertEqual(result, {"claims": []})
-        self.assertEqual(post.call_count, 2)
-        first_payload, fallback_payload = submitted_payloads
-        self.assertEqual(first_payload["response_format"], {"type": "json_object"})
-        self.assertNotIn("response_format", fallback_payload)
-        self.assertIn("كائن JSON صالحًا فقط", fallback_payload["messages"][0]["content"])
+        self.assertEqual(post.call_count, 1)
+        response_format = post.call_args.kwargs["json"]["response_format"]
+        self.assertEqual(response_format["type"], "json_schema")
+        self.assertEqual(response_format["json_schema"]["name"], "test_claims")
+        self.assertTrue(response_format["json_schema"]["strict"])
+        self.assertEqual(response_format["json_schema"]["schema"], CLAIM_EXTRACTION_SCHEMA)
 
-    def test_other_400_errors_are_not_retried_as_json_mode_failures(self):
+    def test_model_without_strict_schema_support_is_rejected_before_request(self):
+        with (
+            patch("fact_check.GROQ_API_KEY", "test-key"),
+            patch("fact_check.FACT_CHECK_MODEL", "some/unsupported-model"),
+            patch("fact_check.requests.post") as post,
+            self.assertRaisesRegex(FactCheckError, "does not support Groq strict JSON Schema"),
+        ):
+            _groq_json(
+                "extract claims",
+                "script",
+                schema_name="test_claims",
+                schema=CLAIM_EXTRACTION_SCHEMA,
+            )
+
+        post.assert_not_called()
+
+    def test_strict_schema_rejection_never_falls_back_to_unconstrained_text(self):
+        rejected_schema = SimpleNamespace(
+            status_code=400,
+            headers={},
+            text='{"error":{"code":"json_validate_failed"}}',
+            json=lambda: {"error": {"code": "json_validate_failed"}},
+        )
+        with (
+            patch("fact_check.GROQ_API_KEY", "test-key"),
+            patch("fact_check.requests.post", return_value=rejected_schema) as post,
+            self.assertRaisesRegex(FactCheckError, "refusing an unconstrained text fallback"),
+        ):
+            _groq_json(
+                "extract claims",
+                "script",
+                schema_name="test_claims",
+                schema=CLAIM_EXTRACTION_SCHEMA,
+                max_tokens=700,
+            )
+
+        self.assertEqual(post.call_count, 1)
+
+    def test_other_400_errors_are_not_retried_as_strict_schema_failures(self):
         bad_request = SimpleNamespace(
             status_code=400,
             headers={},
@@ -207,7 +256,12 @@ class GroqRateLimitRetryTests(unittest.TestCase):
             patch("fact_check.requests.post", return_value=bad_request) as post,
             self.assertRaisesRegex(FactCheckError, "request failed \\(400\\)"),
         ):
-            _groq_json("system", "user")
+            _groq_json(
+                "system",
+                "user",
+                schema_name="test_claims",
+                schema=CLAIM_EXTRACTION_SCHEMA,
+            )
 
         self.assertEqual(post.call_count, 1)
 
@@ -220,10 +274,50 @@ class GroqRateLimitRetryTests(unittest.TestCase):
             patch("fact_check.time.sleep") as sleep,
             self.assertRaisesRegex(FactCheckError, "persisted after 2 retries"),
         ):
-            _groq_json("system", "user")
+            _groq_json(
+                "system",
+                "user",
+                schema_name="test_claims",
+                schema=CLAIM_EXTRACTION_SCHEMA,
+            )
 
         self.assertEqual(post.call_count, 3)
         self.assertEqual(sleep.call_count, 2)
+
+    def test_extraction_and_judging_use_distinct_strict_schemas(self):
+        with patch(
+            "fact_check._groq_json",
+            return_value={
+                "claims": [{"claim": "ادعاء موثق", "importance": "core", "numeric": False}]
+            },
+        ) as call:
+            claims = _extract_claims("نص الفيديو", "الحقيقة الثابتة")
+
+        self.assertEqual(claims[0]["claim"], "ادعاء موثق")
+        self.assertEqual(call.call_args.kwargs["schema_name"], "fact_check_claims")
+        self.assertEqual(call.call_args.kwargs["schema"], CLAIM_EXTRACTION_SCHEMA)
+
+        sources = [{"url": "https://example.org/a", "text": "دليل"}]
+        with patch(
+            "fact_check._groq_json",
+            return_value={"claims": [], "overall_reason": ""},
+        ) as call:
+            _judge_claims("نص الفيديو", "الحقيقة الثابتة", claims, sources)
+
+        self.assertEqual(call.call_args.kwargs["schema_name"], "fact_check_verdicts")
+        self.assertEqual(call.call_args.kwargs["schema"], CLAIM_VERDICT_SCHEMA)
+
+    def test_invalid_local_claim_types_are_rejected_not_coerced(self):
+        with (
+            patch(
+                "fact_check._groq_json",
+                return_value={
+                    "claims": [{"claim": "ادعاء", "importance": "core", "numeric": "false"}]
+                },
+            ),
+            self.assertRaisesRegex(FactCheckError, "non-boolean numeric flag"),
+        ):
+            _extract_claims("نص", "حقيقة")
 
     def test_generic_noaa_nasa_indexes_are_rejected_before_network_fetch(self):
         indexes = [
