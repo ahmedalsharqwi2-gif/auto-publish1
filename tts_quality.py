@@ -15,6 +15,7 @@ tts_quality.py — حراسة الجودة لمسار الصوت (SILMA) في خ
 from __future__ import annotations
 
 import difflib
+import json
 import logging
 import os
 import re
@@ -247,6 +248,35 @@ def media_duration(path: Path) -> float:
 # ---------------------------------------------------------------------------
 REF_MAX_SECONDS = float(os.getenv("SILMA_REF_MAX_SECONDS", "8.5"))
 REF_MIN_SECONDS = float(os.getenv("SILMA_REF_MIN_SECONDS", "3.0"))
+
+
+def resolve_reference_profile(profile: str, config_path: Path) -> tuple[Path, str]:
+    """Resolve a named SILMA voice profile from a JSON config file."""
+    config_path = config_path if config_path.is_absolute() else Path.cwd() / config_path
+    if not config_path.exists():
+        raise FileNotFoundError(f"Voice profiles config is missing: {config_path}")
+    data = json.loads(config_path.read_text(encoding="utf-8"))
+    profiles = data.get("profiles") or {}
+    selected = profile or data.get("default")
+    if selected not in profiles:
+        available = ", ".join(sorted(profiles)) or "none"
+        raise ValueError(f"Unknown SILMA voice profile '{selected}'. Available: {available}")
+    entry = profiles[selected]
+    wav = Path(entry["wav"])
+    text_path = Path(entry["text"])
+    if not wav.is_absolute():
+        wav = Path.cwd() / wav
+    if not text_path.is_absolute():
+        text_path = Path.cwd() / text_path
+    if not wav.exists() or not wav.is_file():
+        raise FileNotFoundError(f"Voice profile '{selected}' WAV is missing: {wav}")
+    if not text_path.exists() or not text_path.is_file():
+        raise FileNotFoundError(f"Voice profile '{selected}' text is missing: {text_path}")
+    text = text_path.read_text(encoding="utf-8").strip()
+    if not text:
+        raise ValueError(f"Voice profile '{selected}' text is empty: {text_path}")
+    log.info("Using SILMA voice profile '%s': %s", selected, wav)
+    return wav, text
 
 
 def load_reference(wav: Path, fallback_text: str = "") -> tuple[Path, str]:

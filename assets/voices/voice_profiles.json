@@ -1,0 +1,25 @@
+{
+  "default": "mohamed_elbed",
+  "profiles": {
+    "mohamed_elbed": {
+      "label": "Arabic male — Mohamed ElBed",
+      "wav": "assets/voices/mohamed_elbed.wav",
+      "text": "assets/voices/mohamed_elbed.txt"
+    },
+    "rafik_sa": {
+      "label": "Arabic male — Saudi / Rafik A",
+      "wav": "assets/voices/rafik_sa.wav",
+      "text": "assets/voices/rafik_sa.txt"
+    },
+    "egyptian_female": {
+      "label": "Arabic female — Egyptian",
+      "wav": "assets/voices/egyptian_female.wav",
+      "text": "assets/voices/egyptian_female.txt"
+    },
+    "hossam": {
+      "label": "Arabic male — Hossam",
+      "wav": "assets/voices/hossam.wav",
+      "text": "assets/voices/hossam.txt"
+    }
+  }
+}

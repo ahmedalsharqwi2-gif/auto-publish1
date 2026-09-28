@@ -5,6 +5,17 @@ on:
     - cron: '0 11 * * *'
     - cron: '0 15 * * *'
   workflow_dispatch:
+    inputs:
+      voice_profile:
+        description: "SILMA voice profile for this run"
+        required: false
+        type: choice
+        options:
+          - mohamed_elbed
+          - rafik_sa
+          - egyptian_female
+          - hossam
+        default: mohamed_elbed
 
 permissions:
   contents: write
@@ -40,14 +51,23 @@ jobs:
         with:
           path: ~/.cache/huggingface
           key: hf-models-v1
-      - name: Ensure SILMA reference voice
+      - name: Validate selected SILMA voice profile
+        env:
+          SILMA_REFERENCE_PROFILE: ${{ inputs.voice_profile || 'mohamed_elbed' }}
+          SILMA_VOICE_PROFILES_FILE: 'assets/voices/voice_profiles.json'
         run: |
-          if [ ! -s assets/voice_reference_synthetic.wav ] || [ ! -s assets/voice_reference_synthetic.txt ]; then
-            echo "Reference voice is missing; generating it automatically."
-            python make_reference_voice.py
-          else
-            echo "Reference voice already exists."
-          fi
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          from tts_quality import resolve_reference_profile
+          wav, text = resolve_reference_profile(
+              os.environ["SILMA_REFERENCE_PROFILE"],
+              Path(os.environ["SILMA_VOICE_PROFILES_FILE"]),
+          )
+          print(f"Selected voice profile: {os.environ['SILMA_REFERENCE_PROFILE']}")
+          print(f"Reference WAV: {wav}")
+          print(f"Reference text words: {len(text.split())}")
+          PY
       - name: Generate and publish
         env:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
@@ -65,7 +85,8 @@ jobs:
           MIN_SCENE_CLIPS: '4'
           TOPIC_HISTORY_FILE: 'topic_history.json'
           TTS_ENGINE: 'silma'
-          SILMA_REFERENCE_WAV: 'assets/voice_reference_synthetic.wav'
+          SILMA_REFERENCE_PROFILE: ${{ inputs.voice_profile || 'mohamed_elbed' }}
+          SILMA_VOICE_PROFILES_FILE: 'assets/voices/voice_profiles.json'
           SILMA_SPEED: '1.0'
           SILMA_MAX_ATTEMPTS: '2'
           SILMA_MIN_SCORE: '0.6'

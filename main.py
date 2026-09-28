@@ -58,7 +58,7 @@ from pathlib import Path
 from typing import Any
 
 import requests
-from tts_quality import enforce_text_quality, generate_silma_guarded, load_reference
+from tts_quality import enforce_text_quality, generate_silma_guarded, load_reference, resolve_reference_profile
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -145,6 +145,8 @@ EDGE_TTS_RATE = os.getenv("EDGE_TTS_RATE", "-8%")
 EDGE_TTS_PITCH = os.getenv("EDGE_TTS_PITCH", "-5Hz")
 SILMA_REFERENCE_WAV = Path(os.getenv("SILMA_REFERENCE_WAV", "assets/voice_reference_synthetic.wav"))
 SILMA_REFERENCE_TEXT = os.getenv("SILMA_REFERENCE_TEXT", "").strip()  # legacy fallback only
+SILMA_REFERENCE_PROFILE = os.getenv("SILMA_REFERENCE_PROFILE", "").strip()
+SILMA_VOICE_PROFILES_FILE = Path(os.getenv("SILMA_VOICE_PROFILES_FILE", "assets/voices/voice_profiles.json"))
 SILMA_SEED = int(os.getenv("SILMA_SEED", "42"))
 SILMA_MAX_ATTEMPTS = int(os.getenv("SILMA_MAX_ATTEMPTS", "2"))
 SILMA_MIN_SCORE = float(os.getenv("SILMA_MIN_SCORE", "0.6"))
@@ -1379,7 +1381,12 @@ def generate_tts(text: str, out_path: Path, voice: str = TTS_VOICE) -> Path:
     """Generate SILMA, guard its audio, and fall back to Edge when needed."""
     if TTS_ENGINE == "silma":
         try:
-            reference, ref_text = load_reference(SILMA_REFERENCE_WAV, SILMA_REFERENCE_TEXT)
+            if SILMA_REFERENCE_PROFILE:
+                reference, ref_text = resolve_reference_profile(
+                    SILMA_REFERENCE_PROFILE, SILMA_VOICE_PROFILES_FILE
+                )
+            else:
+                reference, ref_text = load_reference(SILMA_REFERENCE_WAV, SILMA_REFERENCE_TEXT)
             generate_silma_guarded(
                 text, out_path, reference, ref_text,
                 speed=SILMA_SPEED, base_seed=SILMA_SEED,
