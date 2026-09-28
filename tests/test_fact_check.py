@@ -64,6 +64,7 @@ class FactCheckSourceFallbackTests(unittest.TestCase):
     def test_rejects_when_every_source_is_unavailable(self):
         with (
             patch("fact_check._load_config", return_value=self.config),
+            patch("fact_check.REQUIRE_EXTERNAL_SOURCES", True),
             patch("fact_check.fetch_source", side_effect=requests.HTTPError("403 Forbidden")),
             patch("fact_check._extract_claims") as extract_claims,
         ):
@@ -107,6 +108,31 @@ class FactCheckSourceFallbackTests(unittest.TestCase):
         self.assertEqual(report["status"], "PASS")
         self.assertEqual(report["sources_fetched"], [source["url"]])
         self.assertEqual(len(report["source_fetch_errors"]), 1)
+
+    def test_vetted_bank_fact_is_used_when_external_sources_are_unavailable(self):
+        verdict = {
+            "claims": [{
+                "claim": "A supported scientific claim.",
+                "verdict": "supported",
+                "confidence": 0.95,
+                "evidence_quote": self.topic["verified_fact"],
+                "source_url": "topic-bank://verified_fact",
+                "reason": "Supported by the vetted topic-bank fact.",
+            }],
+            "overall_reason": "External source unavailable; checked against the vetted bank fact.",
+        }
+        with (
+            patch("fact_check._load_config", return_value=self.config),
+            patch("fact_check.REQUIRE_EXTERNAL_SOURCES", False),
+            patch("fact_check.fetch_source", side_effect=requests.HTTPError("403 Forbidden")),
+            patch("fact_check._extract_claims", return_value=[{"claim": self.topic["verified_fact"]}]),
+            patch("fact_check._judge_claims", return_value=verdict) as judge,
+        ):
+            report = fact_check_topic(self.topic)
+
+        self.assertEqual(report["status"], "PASS")
+        self.assertEqual(report["sources_fetched"], ["topic-bank://verified_fact"])
+        self.assertEqual(judge.call_args.args[3][0]["url"], "topic-bank://verified_fact")
 
     def test_preflight_returns_usable_sources_and_structured_failures(self):
         good = {"url": self.topic["source_urls"][1], "text": "x" * 350}
