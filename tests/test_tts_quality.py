@@ -17,6 +17,12 @@ class NarrationTextQualityTests(unittest.TestCase):
         self.assertNotRegex(cleaned, r"[A-Za-z]")
         self.assertIn("الفِكْرَةَ", cleaned)
 
+    def test_rejects_common_pronoun_verb_mismatch(self):
+        with self.assertRaises(Exception):
+            enforce_text_quality("هُوَ قَالَتْ ذَلِكَ.")
+        with self.assertRaises(Exception):
+            enforce_text_quality("هِيَ ذَهَبَ إِلَى الْبَيْتِ.")
+
 
 class UploadedVoiceProfileTests(unittest.TestCase):
     def test_all_uploaded_voices_resolve_to_existing_audio_and_text(self):
