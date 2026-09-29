@@ -1,17 +1,20 @@
 # -*- coding: utf-8 -*-
-"""
-main.py - نقطة الدخول الرئيسية
-=================================
-متحكم المشروع - ينسق بين جميع وحدات المشروع.
-"""
+"""Entry point for the simplified Arabic Reels generation and publishing pipeline."""
 
+from __future__ import annotations
+
+import logging
 import os
 import sys
-import logging
 from pathlib import Path
-from typing import Optional
 
-# Setup logging
+from scripts.assemble_reel import assemble_reel
+from scripts.generate_content import ContentGenerator
+from scripts.generate_voice import VoiceGenerator
+from scripts.github_media import host_video_on_github
+from scripts.publish_content import ContentPublisher
+from scripts.quality_check import QualityCheckPipeline
+
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 logging.basicConfig(
     level=LOG_LEVEL,
@@ -20,115 +23,106 @@ logging.basicConfig(
 )
 log = logging.getLogger("pipeline")
 
-from scripts import (
-    ContentGenerator,
-    VoiceGenerator,
-    QualityCheckPipeline,
-    ContentPublisher,
-)
+
+def parse_channel_ids(raw: str | None) -> list[str]:
+    """Parse the comma-separated BUFFER_CHANNEL_IDS secret without fake defaults."""
+    if not raw:
+        return []
+    return [part.strip() for part in raw.split(",") if part.strip()]
 
 
 class AutoPublishPipeline:
-    """خط الأنابيب الرئيسي لتوليد ونشر المحتوى."""
+    """Generate Arabic narration, render a vertical reel, host it and queue it."""
 
     def __init__(self):
+        self.output_dir = Path(os.getenv("OUTPUT_DIR", "./output"))
         self.content_generator = ContentGenerator(
-            min_words=int(os.getenv("MIN_WORDS", "300")),
-            max_words=int(os.getenv("MAX_WORDS", "1000")),
+            min_words=int(os.getenv("MIN_WORDS", "90")),
+            max_words=int(os.getenv("MAX_WORDS", "165")),
         )
-        self.voice_generator = VoiceGenerator(
-            output_dir=Path(os.getenv("OUTPUT_DIR", "./output"))
-        )
+        self.voice_generator = VoiceGenerator(output_dir=self.output_dir)
         self.quality_checker = QualityCheckPipeline(
             min_acceptable_score=float(os.getenv("MIN_QUALITY_SCORE", "0.75"))
         )
         self.publisher = ContentPublisher()
 
-    def run(self, category: str = "", topic: Optional[str] = None) -> bool:
-        """Run the complete pipeline."""
-        log.info("\n" + "="*60)
-        log.info("Starting Auto-Publish Pipeline")
-        log.info("="*60)
-
+    def run(self, category: str = "", topic: str | None = None) -> bool:
+        log.info("Starting simplified Arabic Reels pipeline")
         try:
-            # Step 1: Generate topic
+            channel_ids = parse_channel_ids(os.getenv("BUFFER_CHANNEL_IDS"))
+            if not channel_ids:
+                raise ValueError("BUFFER_CHANNEL_IDS is required (comma-separated Buffer channel IDs)")
+
             if topic is None:
-                log.info("\n[Step 1] Generating topic...")
+                log.info("Generating a topic for category %s", category or "general")
                 topic = self.content_generator.generate_topic(category)
-                log.info(f"✓ Topic generated: {topic[:80]}...")
-            else:
-                log.info(f"\n[Step 1] Using provided topic: {topic[:80]}...")
+            topic = topic.strip()
+            if not topic:
+                raise ValueError("The generated topic is empty")
 
-            # Step 2: Generate narration
-            log.info("\n[Step 2] Generating narration...")
+            log.info("Generating narration for topic: %s", topic[:80])
             narration = self.content_generator.generate_narration(topic)
-            log.info(f"✓ Narration generated ({len(narration.split())} words)")
-
-            # Step 3: Quality check
-            log.info("\n[Step 3] Checking content quality...")
-            checked_text, text_report = self.quality_checker.check_text(narration)
-            log.info(f"✓ Quality check complete (score: {text_report.overall_score:.2f}/1.0)")
-
+            narration, text_report = self.quality_checker.check_text(narration)
+            log.info("Text quality score: %.2f", text_report.overall_score)
             if not text_report.is_acceptable:
-                log.error("Content quality not acceptable for publishing")
+                log.error("Text did not pass the quality gate: %s", text_report.issues)
                 return False
 
-            # Step 4: Generate voice
-            log.info("\n[Step 4] Generating voice...")
-            output_path, success = self.voice_generator.generate(
-                checked_text,
-                output_path=Path("output/narration.mp3"),
+            audio_path = self.output_dir / "narration.mp3"
+            self.output_dir.mkdir(parents=True, exist_ok=True)
+            tts_engine = os.getenv("TTS_ENGINE", "edge").strip().lower()
+            tts_voice = (
+                os.getenv("EDGE_TTS_VOICE") if tts_engine == "edge"
+                else os.getenv("GOOGLE_TTS_VOICE")
             )
-
-            if not success:
+            audio_path, audio_created = self.voice_generator.generate(
+                narration,
+                output_path=audio_path,
+                engine=tts_engine,
+                voice=tts_voice,
+            )
+            if not audio_created:
                 log.error("Voice generation failed")
                 return False
 
-            log.info(f"✓ Voice generated: {output_path}")
-
-            # Step 5: Audio quality check
-            log.info("\n[Step 5] Checking audio quality...")
-            audio_report = self.quality_checker.check_audio(output_path, checked_text)
-            log.info(f"✓ Audio quality check complete (score: {audio_report.overall_score:.2f}/1.0)")
-
+            audio_report = self.quality_checker.check_audio(audio_path, narration)
+            log.info("Audio quality score: %.2f", audio_report.overall_score)
             if not audio_report.is_acceptable:
-                log.error("Audio quality not acceptable for publishing")
+                log.error("Audio did not pass the quality gate: %s", audio_report.issues)
                 return False
 
-            # Step 6: Publish
-            log.info("\n[Step 6] Publishing content...")
-            title = topic[:60]
-            description = f"{narration[:200]}...\n\n#المحتوى_المولد_آلياً #الذكاء_الاصطناعي"
-            channels = os.getenv("PUBLISH_CHANNELS", "youtube,tiktok,instagram").split(",")
-
-            publish_success = self.publisher.publish_to_buffer(
-                video_path=output_path,
+            title = topic[:100].strip()
+            video_path = self.output_dir / "reel.mp4"
+            assemble_reel(
+                audio_path=audio_path,
+                narration=narration,
+                title=title,
+                output_path=video_path,
+            )
+            video_url = host_video_on_github(video_path)
+            description = f"{narration[:200].strip()}...\n\n#ريلز #محتوى_عربي"
+            published = self.publisher.publish_to_buffer(
+                video_url=video_url,
                 title=title,
                 description=description,
-                channel_ids=channels,
+                channel_ids=channel_ids,
             )
+            if not published:
+                log.error("Buffer publishing failed for one or more channels")
+                return False
 
-            if publish_success:
-                log.info(f"✓ Content published successfully")
-            else:
-                log.warning("Publishing completed with warnings")
-
-            log.info("\n" + "="*60)
-            log.info("Pipeline completed successfully!")
-            log.info("="*60 + "\n")
+            log.info("Reel queued successfully for %d Buffer channel(s)", len(channel_ids))
             return True
-
-        except Exception as e:
-            log.error(f"Pipeline failed: {e}", exc_info=True)
+        except Exception as exc:
+            log.error("Pipeline failed: %s", exc, exc_info=True)
             return False
 
 
-if __name__ == "__main__":
-    pipeline = AutoPublishPipeline()
-    
-    # Get topic from environment or command line
+def main() -> int:
     topic = os.getenv("TOPIC") or (sys.argv[1] if len(sys.argv) > 1 else None)
     category = os.getenv("CATEGORY", "عام")
-    
-    success = pipeline.run(category=category, topic=topic)
-    sys.exit(0 if success else 1)
+    return 0 if AutoPublishPipeline().run(category=category, topic=topic) else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
