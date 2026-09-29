@@ -148,7 +148,8 @@ jobs:
           TOPIC_GENERATION_MAX_ATTEMPTS: '3'
           VOICE_ROTATION_ENABLED: 'true'
           VOICE_SELECTION_MODE: 'content'
-          AUTO_VOICE_PROFILES: 'hossam,hossam_uploaded,marwan,nassim,ahmed_z,egyptian_female'
+          AUTO_VOICE_PROFILES: 'mohamed_elbed,rafik_sa,egyptian_female,hossam,hossam_uploaded,marwan,nassim,ahmed_z'
+          VOICE_ROTATION_STATE_FILE: 'state/voice_rotation.json'
           MIN_SCENE_CLIPS: '4'
 
           # --- Topic history ---
@@ -197,10 +198,10 @@ jobs:
       - name: Persist topic history
         if: success()
         run: |
-          if [ ! -f topic_history.json ]; then exit 0; fi
+          if [ ! -f topic_history.json ] && [ ! -f state/voice_rotation.json ]; then exit 0; fi
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add topic_history.json
+          git add topic_history.json state/voice_rotation.json
           if git diff --cached --quiet; then
             echo "No topic-history changes to persist."
             exit 0
@@ -212,4 +213,3 @@ jobs:
 
       - name: Verify Arabic narration guard
         run: python -m unittest tests.test_arabic_guard -v
-

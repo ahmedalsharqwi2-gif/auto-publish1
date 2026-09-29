@@ -7,6 +7,7 @@ scripts/generate_voice.py - توليد الصوت
 
 import os
 import sys
+import json
 import logging
 from pathlib import Path
 from typing import Optional, Tuple
@@ -19,6 +20,7 @@ except ImportError:
 
 from google_cloud_tts import GoogleCloudTTS
 from arabic_tts_quality_checker import ArabicTTSQualityChecker
+from tts_quality import generate_silma_guarded, resolve_reference_profile
 
 log = logging.getLogger("pipeline")
 
@@ -30,6 +32,36 @@ def edge_fallback_voice(voice: Optional[str]) -> str:
     if voice and voice.startswith("ar-") and "Neural2" not in voice:
         return voice
     return EDGE_FALLBACK_VOICE
+
+
+def select_silma_profile() -> str:
+    """Select the next configured uploaded voice and persist rotation state."""
+    config_path = Path(os.getenv("SILMA_VOICE_PROFILES_FILE", "assets/voices/voice_profiles.json"))
+    data = json.loads(config_path.read_text(encoding="utf-8"))
+    available = list((data.get("profiles") or {}).keys())
+    configured = [item.strip() for item in os.getenv("AUTO_VOICE_PROFILES", "").split(",") if item.strip()]
+    profiles = [profile for profile in configured if profile in available] or available
+    if not profiles:
+        raise ValueError("No SILMA voice profiles are configured")
+    requested = os.getenv("SILMA_REFERENCE_PROFILE", "auto").strip()
+    if requested and requested != "auto":
+        if requested not in available:
+            raise ValueError(f"Unknown SILMA voice profile: {requested}")
+        selected = requested
+    else:
+        state_path = Path(os.getenv("VOICE_ROTATION_STATE_FILE", "state/voice_rotation.json"))
+        state = {}
+        if state_path.exists():
+            try:
+                state = json.loads(state_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                state = {}
+        previous = state.get("last_profile")
+        index = profiles.index(previous) if previous in profiles else -1
+        selected = profiles[(index + 1) % len(profiles)]
+        state_path.parent.mkdir(parents=True, exist_ok=True)
+        state_path.write_text(json.dumps({"last_profile": selected}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return selected
 
 
 class VoiceGenerator:
@@ -139,6 +171,25 @@ class VoiceGenerator:
             output_path = self.output_dir / "narration.mp3"
         
         output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        if os.getenv("TTS_ENGINE", "google").strip().lower() == "silma":
+            try:
+                profile = select_silma_profile()
+                config_path = Path(os.getenv("SILMA_VOICE_PROFILES_FILE", "assets/voices/voice_profiles.json"))
+                reference_wav, reference_text = resolve_reference_profile(profile, config_path)
+                log.info("Generating speech with SILMA voice profile: %s", profile)
+                generate_silma_guarded(
+                    text,
+                    output_path,
+                    reference_wav,
+                    reference_text,
+                    speed=float(os.getenv("SILMA_SPEED", "1.15")),
+                    attempts=int(os.getenv("SILMA_MAX_ATTEMPTS", "2")),
+                    min_score=float(os.getenv("SILMA_MIN_SCORE", "0.6")),
+                )
+                return output_path, True
+            except Exception as exc:
+                log.warning("SILMA generation failed, trying Google/Edge fallback: %s", exc)
         
         # Try Google Cloud TTS first
         if engine == "google" or not voice:
