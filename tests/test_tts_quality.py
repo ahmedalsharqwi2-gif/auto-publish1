@@ -2,6 +2,7 @@ import json
 import unittest
 from pathlib import Path
 
+from arabic_tts_quality_checker import ArabicTTSQualityChecker
 from tts_quality import enforce_text_quality, resolve_reference_profile
 
 
@@ -9,6 +10,13 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class NarrationTextQualityTests(unittest.TestCase):
+    def test_special_character_report_does_not_crash(self):
+        checker = ArabicTTSQualityChecker()
+        score, issues, warnings = checker.check_text_quality("نص عربي @ $ % &")
+
+        self.assertLess(score, 1.0)
+        self.assertTrue(any("رموز خاصة" in issue for issue in issues))
+
     def test_removes_lingering_latin_tokens_after_revision(self):
         script = "هَذَا نَصٌّ عَرَبِيٌّ جَيِّدٌ يَشْرَحُ الفِكْرَةَ A N O بِوُضُوحٍ."
 
