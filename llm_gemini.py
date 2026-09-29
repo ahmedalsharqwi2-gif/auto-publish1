@@ -42,6 +42,14 @@ GEMINI_THINKING_LEVEL = os.getenv("GEMINI_THINKING_LEVEL", "low").strip().lower(
 # 0 means do not override the caller's requested output-token limit.
 GEMINI_MIN_OUTPUT_TOKENS = int(os.getenv("GEMINI_MIN_OUTPUT_TOKENS", "0"))
 GEMINI_RETRIES = max(1, int(os.getenv("GEMINI_RETRIES", "3")))
+OPENROUTER_API_KEY = _clean_key(os.getenv("OPENROUTER_API_KEY"))
+OPENROUTER_ENDPOINT = os.getenv(
+    "OPENROUTER_ENDPOINT", "https://openrouter.ai/api/v1/chat/completions"
+)
+OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "google/gemini-2.5-flash")
+OPENROUTER_RETRIES = max(1, int(os.getenv("OPENROUTER_RETRIES", "2")))
+OPENROUTER_REFERER = os.getenv("OPENROUTER_REFERER", "https://github.com/")
+OPENROUTER_TITLE = os.getenv("OPENROUTER_TITLE", "Auto Publish Reels")
 
 
 def gemini_key_kind() -> str:
@@ -210,3 +218,71 @@ def gemini_chat(
             time.sleep(2 * attempt)
 
     raise RuntimeError(f"Gemini failed: {last_error}")
+
+
+def llm_chat(
+    messages: list[dict[str, str]],
+    max_tokens: int = 4000,
+    temperature: float = 0.6,
+    timeout: int = 120,
+) -> str:
+    """Call Gemini, then OpenRouter when Gemini is unavailable."""
+    errors: list[str] = []
+    if GEMINI_API_KEY:
+        try:
+            return gemini_chat(
+                messages, max_tokens=max_tokens, temperature=temperature, timeout=timeout
+            )
+        except Exception as exc:
+            errors.append(f"gemini: {exc}")
+            log.warning("Gemini unavailable; trying OpenRouter fallback: %s", exc)
+    else:
+        errors.append("gemini: API key is not set")
+
+    if OPENROUTER_API_KEY:
+        payload = {
+            "model": OPENROUTER_MODEL,
+            "messages": messages,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+        }
+        headers = {
+            "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": OPENROUTER_REFERER,
+            "X-Title": OPENROUTER_TITLE,
+        }
+        for attempt in range(1, OPENROUTER_RETRIES + 1):
+            try:
+                response = requests.post(
+                    OPENROUTER_ENDPOINT, headers=headers, json=payload, timeout=timeout
+                )
+                if response.status_code != 200:
+                    error = f"openrouter: HTTP {response.status_code}"
+                    errors.append(error)
+                    log.warning(
+                        "OpenRouter %s attempt %d/%d failed: %s",
+                        OPENROUTER_MODEL, attempt, OPENROUTER_RETRIES, error,
+                    )
+                    if response.status_code in (429, 500, 502, 503, 504):
+                        time.sleep(2 * attempt)
+                        continue
+                    break
+                content = ((response.json().get("choices") or [{}])[0]
+                           .get("message") or {}).get("content") or ""
+                if content.strip():
+                    log.info("OpenRouter: using model %s", OPENROUTER_MODEL)
+                    return content
+                errors.append("openrouter: empty content")
+            except (requests.RequestException, ValueError, AttributeError) as exc:
+                errors.append(f"openrouter: {exc}")
+                log.warning(
+                    "OpenRouter %s attempt %d/%d error: %s",
+                    OPENROUTER_MODEL, attempt, OPENROUTER_RETRIES, exc,
+                )
+            if attempt < OPENROUTER_RETRIES:
+                time.sleep(2 * attempt)
+    else:
+        errors.append("openrouter: API key is not set")
+
+    raise RuntimeError("All LLM providers failed: " + "; ".join(errors)[-800:])

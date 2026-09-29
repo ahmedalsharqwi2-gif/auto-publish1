@@ -11,7 +11,7 @@ import logging
 from pathlib import Path
 from typing import Optional
 
-from llm_gemini import gemini_chat
+from llm_gemini import llm_chat
 from arabic_grammar_fixer import ArabicGrammarFixer
 from arabic_tts_quality_checker import ArabicTTSQualityChecker
 
@@ -33,7 +33,7 @@ class ContentGenerator:
         prompt = f"توليد موضوع فريد ومثير للاهتمام باللغة العربية الفصحى {'للفئة: ' + category if category else ''}. الموضوع يجب أن يكون مفيداً وقابلاً للنشر على وسائل التواصل."
         
         try:
-            response = gemini_chat([{"role": "user", "content": prompt}])
+            response = llm_chat([{"role": "user", "content": prompt}])
             topic = response.strip()
             log.info("Generated topic: %s", topic[:100])
             return topic
@@ -58,7 +58,7 @@ class ContentGenerator:
 النص:"""
 
         try:
-            response = gemini_chat([{"role": "user", "content": prompt}])
+            response = llm_chat([{"role": "user", "content": prompt}])
             narration = response.strip()
             
             # Fix grammar and quality
@@ -77,7 +77,7 @@ class ContentGenerator:
                 log.warning("Content quality below acceptable threshold, attempting revision...")
                 # Request revision
                 revision_prompt = f"الرجاء إصلاح الأخطاء التالية في النص:\n{chr(10).join(report.issues)}\n\nالنص الأصلي:\n{fixed_narration}"
-                response = gemini_chat([{"role": "user", "content": revision_prompt}])
+                response = llm_chat([{"role": "user", "content": revision_prompt}])
                 fixed_narration = response.strip()
             
             return fixed_narration
