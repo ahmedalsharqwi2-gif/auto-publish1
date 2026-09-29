@@ -201,3 +201,7 @@ jobs:
           git fetch origin main
           git rebase origin/main
           git push origin HEAD:main
+
+      - name: Verify Arabic narration guard
+        run: python -m unittest tests.test_arabic_guard -v
+
