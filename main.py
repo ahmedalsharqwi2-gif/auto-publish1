@@ -89,8 +89,7 @@ OPENROUTER_REFERER = os.getenv(
 OPENROUTER_TITLE = os.getenv("OPENROUTER_TITLE", "Auto Publish Reels")
 _OPENROUTER_MODEL_LIST_RAW = os.getenv(
     "OPENROUTER_MODEL",
-    "google/gemma-4-26b-a4b-it:free,"
-    "google/gemma-4-31b-it:free,"
+    "qwen/qwen3.8-27b:free,"
     "nvidia/nemotron-3-super-120b-a12b:free",
 )
 OPENROUTER_MODELS = [m.strip() for m in _OPENROUTER_MODEL_LIST_RAW.split(",") if m.strip()]
@@ -465,7 +464,12 @@ SYSTEM_PROMPT = textwrap.dedent(
 ).replace("{channel_brief}", CHANNEL_BRIEF).strip()
 
 
-def _openrouter_chat(messages: list[dict[str, str]], max_tokens: int, temperature: float) -> str:
+def _openrouter_chat(
+    messages: list[dict[str, str]],
+    max_tokens: int,
+    temperature: float,
+    response_format: dict[str, Any] | None = None,
+) -> str:
     """OpenRouter with multi-model fallback (optional secondary provider)."""
     if not OPENROUTER_API_KEY:
         raise PipelineError("OPENROUTER_API_KEY is not set")
@@ -482,9 +486,12 @@ def _openrouter_chat(messages: list[dict[str, str]], max_tokens: int, temperatur
             "messages": messages,
             "max_tokens": max(max_tokens, 8000),
             "temperature": temperature,
-            "reasoning": {"effort": "low", "exclude": True},
-            "response_format": {"type": "json_object"},
+            "reasoning": {"effort": "none", "exclude": True},
+            "response_format": response_format or {"type": "json_object"},
         }
+        if response_format and response_format.get("type") == "json_schema":
+            payload["provider"] = {"require_parameters": True}
+            payload["plugins"] = [{"id": "response-healing"}]
         for attempt in range(1, OPENROUTER_MAX_ATTEMPTS + 1):
             try:
                 resp = requests.post(OPENROUTER_ENDPOINT, headers=headers, json=payload, timeout=LLM_TIMEOUT)
@@ -492,11 +499,14 @@ def _openrouter_chat(messages: list[dict[str, str]], max_tokens: int, temperatur
                 last_error = f"{model}: {exc}"
                 log.warning("OpenRouter %s attempt %d: %s", model, attempt, exc)
                 continue
-            if resp.status_code == 429:
-                last_error = f"{model}: 429"
-                log.warning("OpenRouter %s rate-limited", model)
+            if resp.status_code in (408, 429, 500, 502, 503, 504):
+                last_error = f"{model}: HTTP {resp.status_code}"
+                log.warning(
+                    "OpenRouter %s transient HTTP %s (attempt %d/%d)",
+                    model, resp.status_code, attempt, OPENROUTER_MAX_ATTEMPTS,
+                )
                 if attempt < OPENROUTER_MAX_ATTEMPTS:
-                    time.sleep(8.0)
+                    time.sleep(min(30.0, 3.0 * (2 ** (attempt - 1))) + random.uniform(0, 1.5))
                 continue
             if resp.status_code != 200:
                 last_error = f"{model}: HTTP {resp.status_code} {resp.text[:200]}"
@@ -518,8 +528,12 @@ def _openrouter_chat(messages: list[dict[str, str]], max_tokens: int, temperatur
     raise PipelineError(f"All OpenRouter models failed: {last_error}")
 
 
-def llm_chat(messages: list[dict[str, str]], max_tokens: int = LLM_MAX_COMPLETION_TOKENS,
-             temperature: float = 0.7) -> str:
+def llm_chat(
+    messages: list[dict[str, str]],
+    max_tokens: int = LLM_MAX_COMPLETION_TOKENS,
+    temperature: float = 0.7,
+    response_format: dict[str, Any] | None = None,
+) -> str:
     """Dispatch to Gemini first; if it fails and OpenRouter is configured, try that."""
     if GEMINI_API_KEY:
         try:
@@ -531,7 +545,7 @@ def llm_chat(messages: list[dict[str, str]], max_tokens: int = LLM_MAX_COMPLETIO
                 raise PipelineError(f"Gemini failed and no fallback is configured: {exc}") from exc
             log.warning("Trying OpenRouter fallback")
     if OPENROUTER_API_KEY:
-        return _openrouter_chat(messages, max_tokens, temperature)
+        return _openrouter_chat(messages, max_tokens, temperature, response_format)
     raise PipelineError("No LLM provider available")
 
 
@@ -660,6 +674,41 @@ def build_topic_user_prompt(recent_topics: list[str], recent_categories: list[st
     )
 
 
+TOPIC_RESPONSE_FORMAT: dict[str, Any] = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "topic",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "category": {"type": "string"},
+                "subject": {"type": "string"},
+                "hook_text": {"type": "string"},
+                "narration_script": {"type": "string"},
+                "title": {"type": "string"},
+                "caption": {"type": "string"},
+                "hashtags": {"type": "array", "items": {"type": "string"}},
+                "search_keywords_en": {"type": "string"},
+                "scene_keywords_en": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": [
+                "category", "subject", "hook_text", "narration_script", "title",
+                "caption", "hashtags", "search_keywords_en", "scene_keywords_en",
+            ],
+            "additionalProperties": False,
+        },
+    },
+}
+
+
+TOPIC_REPAIR_SYSTEM_PROMPT = (
+    "أنت محول JSON صارم. حوّل رد النموذج المرفق إلى كائن JSON فقط، "
+    "بالمفاتيح المطلوبة حرفيًا، ولا تضف أي شرح أو markdown. "
+    "إذا كان الرد مجرد تفكير أو تعليمات، أنشئ القيم الناقصة من سياقه دون اختلاق أرقام."
+)
+
+
 def generate_topic() -> tuple[Topic, list[dict[str, str]], list[dict[str, str]]]:
     log.info("Generating a fresh topic via LLM (provider: %s)...",
              "gemini" if GEMINI_API_KEY else "openrouter")
@@ -693,8 +742,37 @@ def generate_topic() -> tuple[Topic, list[dict[str, str]], list[dict[str, str]]]
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": user_msg},
         ]
-        raw_text = llm_chat(messages, temperature=0.6)
-        topic, word_count = _parse_topic(raw_text)
+        raw_text = llm_chat(
+            messages,
+            temperature=0.6,
+            response_format=TOPIC_RESPONSE_FORMAT,
+        )
+        try:
+            topic, word_count = _parse_topic(raw_text)
+        except PipelineError as first_error:
+            # بعض endpoints قد تعيد شرحًا نصيًا رغم طلب JSON؛ نرسل الرد
+            # إلى محاولة إصلاح مستقلة بمخطط صارم قبل فشل محاولة الموضوع.
+            log.warning(
+                "Topic response was not valid JSON; attempting structured repair: %s",
+                first_error,
+            )
+            repair_messages = [
+                {"role": "system", "content": TOPIC_REPAIR_SYSTEM_PROMPT},
+                {
+                    "role": "user",
+                    "content": "المخطط المطلوب:\n"
+                    + json.dumps(TOPIC_RESPONSE_FORMAT["json_schema"]["schema"], ensure_ascii=False)
+                    + "\n\nرد النموذج غير المنظم:\n"
+                    + raw_text[:12000],
+                },
+            ]
+            repaired = llm_chat(
+                repair_messages,
+                max_tokens=LLM_MAX_COMPLETION_TOKENS,
+                temperature=0.0,
+                response_format=TOPIC_RESPONSE_FORMAT,
+            )
+            topic, word_count = _parse_topic(repaired)
 
         if topic.category not in TOPIC_CATEGORIES:
             raise PipelineError(f"Model returned unknown category: {topic.category!r}")
