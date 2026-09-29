@@ -1,10 +1,20 @@
 import unittest
 from unittest.mock import patch
 
-from scripts.generate_content import CHANNEL_BRIEF, TOPIC_CATEGORIES, ContentGenerator
+from scripts.generate_content import CHANNEL_BRIEF, TOPIC_CATEGORIES, ContentGenerator, normalize_topic_response
 
 
 class ContentGeneratorTopicPolicyTests(unittest.TestCase):
+    def test_normalize_topic_response_removes_model_wrappers(self):
+        self.assertEqual(
+            normalize_topic_response('**العنوان:** "أسرار المحيط"'),
+            "أسرار المحيط",
+        )
+        self.assertEqual(
+            normalize_topic_response('{"title": "الثقوب السوداء"}'),
+            "الثقوب السوداء",
+        )
+
     def test_channel_brief_and_topic_bank_are_used(self):
         with patch(
             "scripts.generate_content.llm_chat",

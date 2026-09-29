@@ -7,6 +7,8 @@ scripts/generate_content.py - توليد المحتوى
 
 import os
 import sys
+import json
+import re
 import logging
 from pathlib import Path
 from typing import Optional
@@ -49,6 +51,25 @@ TOPIC_CATEGORIES = (
 )
 
 
+def normalize_topic_response(response: str) -> str:
+    """Extract a clean topic/title from JSON or Markdown model output."""
+    text = re.sub(r"```(?:json|markdown|text)?", "", response or "", flags=re.IGNORECASE)
+    text = text.replace("```", "").strip()
+    try:
+        payload = json.loads(text)
+        if isinstance(payload, dict):
+            value = payload.get("topic") or payload.get("title") or payload.get("subject")
+            if value:
+                return re.sub(r"[*_`\"«»]", "", str(value)).strip()
+    except json.JSONDecodeError:
+        pass
+    for line in text.splitlines():
+        clean = re.sub(r"[*_`]", "", line).strip()
+        if any(marker in clean for marker in ("العنوان", "الموضوع", "الفكرة")) and ":" in clean:
+            return re.sub(r"[\"«»]", "", clean.split(":", 1)[1]).strip()
+    return re.sub(r"[*_`\"«»]", "", text.splitlines()[0] if text else "").strip()
+
+
 class ContentGenerator:
     """يولد المحتوى الأساسي (نص وموضوع)."""
 
@@ -79,7 +100,7 @@ class ContentGenerator:
         
         try:
             response = llm_chat([{"role": "user", "content": prompt}])
-            topic = response.strip()
+            topic = normalize_topic_response(response)
             log.info("Generated topic: %s", topic[:100])
             return topic
         except Exception as e:
