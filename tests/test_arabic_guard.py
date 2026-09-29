@@ -1,6 +1,7 @@
 import hashlib
 import json
 import tempfile
+import unicodedata
 import unittest
 from pathlib import Path
 
@@ -35,7 +36,7 @@ class ArabicGuardTests(unittest.TestCase):
 
     def test_protected_text_hash_and_exact_match(self):
         text = "إِنَّ مَعَ الْعُسْرِ يُسْرًا"
-        digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        digest = hashlib.sha256(unicodedata.normalize("NFC", text).encode("utf-8")).hexdigest()
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "protected.json"
             path.write_text(
