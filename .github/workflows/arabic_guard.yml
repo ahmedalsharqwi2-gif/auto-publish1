@@ -1,21 +1,30 @@
-name: Arabic Guard CI
+name: Arabic Guard and Unit Tests
 
 on:
   push:
     branches: ["main"]
+  pull_request:
+    branches: ["main"]
   workflow_dispatch:
 
 jobs:
-  arabic-guard:
+  tests:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Python
+      - name: Set up Python
         uses: actions/setup-python@v6
         with:
           python-version: "3.11"
 
-      - name: Run Arabic guard tests
-        run: python -m unittest discover -s tests -p 'test_arabic_guard.py' -v
+      - name: Install test and rendering dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg fonts-noto-core
+          python -m pip install --upgrade pip
+          pip install -r requirements-runtime.txt
+
+      - name: Run full Python test suite
+        run: python -m unittest discover -s tests -p 'test_*.py' -v

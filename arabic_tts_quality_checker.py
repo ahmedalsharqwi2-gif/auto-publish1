@@ -10,9 +10,11 @@ from __future__ import annotations
 import re
 import logging
 import json
+import shutil
+import subprocess
 from pathlib import Path
 from dataclasses import dataclass
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Tuple
 
 log = logging.getLogger("pipeline")
 
@@ -103,30 +105,32 @@ class ArabicTTSQualityChecker:
         return max(0, score), issues, warnings
 
     def check_audio_quality(self, audio_path: Path, expected_text: str) -> Tuple[float, List[str]]:
-        """Check audio quality (requires faster-whisper)."""
+        """Check that generated audio exists and its duration fits the narration."""
         issues = []
         score = 1.0
-
-        try:
-            from faster_whisper import WhisperModel
-            import numpy as np
-            from scipy.io import wavfile
-        except ImportError:
-            log.warning("faster-whisper or scipy not available, skipping audio quality check")
-            return 0.5, ["لم يتمكن من فحص جودة الصوت (مكتبات ناقصة)"]
 
         if not audio_path.exists():
             return 0.0, [f"ملف الصوت غير موجود: {audio_path}"]
 
         try:
-            # Check audio duration
-            if audio_path.suffix.lower() == '.wav':
-                sample_rate, audio_data = wavfile.read(str(audio_path))
-                duration = len(audio_data) / sample_rate
-            else:
-                # For MP3 files, use simple estimation
-                file_size = audio_path.stat().st_size
-                duration = file_size / (128 * 1024)  # Rough estimate for 128kbps MP3
+            ffprobe = shutil.which("ffprobe")
+            if not ffprobe:
+                raise RuntimeError("ffprobe is required for accurate audio duration checks")
+            result = subprocess.run(
+                [
+                    ffprobe,
+                    "-v", "error",
+                    "-show_entries", "format=duration",
+                    "-of", "default=noprint_wrappers=1:nokey=1",
+                    str(audio_path),
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if result.returncode:
+                raise RuntimeError(result.stderr.strip() or "ffprobe failed")
+            duration = float(result.stdout.strip())
 
             expected_words = len(expected_text.split())
             expected_duration = expected_words / 2.5  # Average 2.5 words per second in Arabic

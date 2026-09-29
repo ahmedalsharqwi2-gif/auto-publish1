@@ -21,6 +21,8 @@ from google_cloud_tts import GoogleCloudTTS
 from arabic_tts_quality_checker import ArabicTTSQualityChecker
 
 log = logging.getLogger("pipeline")
+DEFAULT_GOOGLE_VOICE = "ar-XA-Neural2-B"
+DEFAULT_EDGE_VOICE = "ar-SA-HamedNeural"
 
 
 class VoiceGenerator:
@@ -78,13 +80,16 @@ class VoiceGenerator:
         self,
         text: str,
         output_path: Path,
-        voice: str = "ar-SA-AmmarNeural",
-        rate: str = "+10%",
-        pitch: str = "0Hz",
+        voice: str = DEFAULT_EDGE_VOICE,
+        rate: Optional[str] = None,
+        pitch: Optional[str] = None,
     ) -> Tuple[bool, str]:
         """Generate speech using Edge TTS (fallback)."""
         if not self.edge_tts_available:
             return False, "Edge TTS not available"
+
+        rate = rate or os.getenv("EDGE_TTS_RATE", "+10%")
+        pitch = pitch or os.getenv("EDGE_TTS_PITCH", "0Hz")
         
         import edge_tts
         import asyncio
@@ -122,7 +127,7 @@ class VoiceGenerator:
         self,
         text: str,
         output_path: Optional[Path] = None,
-        engine: str = "google",
+        engine: str = "edge",
         voice: Optional[str] = None,
     ) -> Tuple[Path, bool]:
         """Generate speech with fallback strategy."""
@@ -130,11 +135,17 @@ class VoiceGenerator:
             output_path = self.output_dir / "narration.mp3"
         
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        
-        # Try Google Cloud TTS first
-        if engine == "google" or not voice:
-            voice = voice or 'ar-XA-Neural2-B'
-            success, message = self.generate_with_google_cloud(text, output_path, voice)
+
+        engine = (engine or "edge").strip().lower()
+        if engine not in {"google", "edge"}:
+            log.error("Unsupported TTS engine: %s", engine)
+            return output_path, False
+
+        # Only use a Google voice when Google was explicitly selected. Do not
+        # pass Google-only IDs to Edge TTS after a fallback.
+        if engine == "google":
+            google_voice = voice or DEFAULT_GOOGLE_VOICE
+            success, message = self.generate_with_google_cloud(text, output_path, google_voice)
             if success:
                 log.info(f"Audio generation successful: {message}")
                 return output_path, True
@@ -143,7 +154,10 @@ class VoiceGenerator:
         
         # Fallback to Edge TTS
         if self.edge_tts_available:
-            edge_voice = voice or "ar-SA-AmmarNeural"
+            edge_voice = (
+                voice if engine == "edge" and voice
+                else os.getenv("EDGE_TTS_VOICE", DEFAULT_EDGE_VOICE)
+            )
             success, message = self.generate_with_edge_tts(text, output_path, edge_voice)
             if success:
                 log.info(f"Audio generation successful with Edge TTS: {message}")
