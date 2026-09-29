@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import difflib
+import hashlib
 import json
 import logging
 import os
@@ -115,6 +116,12 @@ SILMA_SPEED = float(os.getenv("SILMA_SPEED", "1.0"))
 SILMA_GUARD_ENABLED = os.getenv("SILMA_GUARD_ENABLED", "true").lower() == "true"
 SILMA_GUARD_MIN_MATCH_WORDS = int(os.getenv("SILMA_GUARD_MIN_MATCH_WORDS", "2"))
 VOICE_ROTATION_ENABLED = os.getenv("VOICE_ROTATION_ENABLED", "true").lower() == "true"
+VOICE_SELECTION_MODE = os.getenv("VOICE_SELECTION_MODE", "rotation").strip().lower()
+AUTO_VOICE_PROFILES = [
+    item.strip() for item in os.getenv(
+        "AUTO_VOICE_PROFILES", "hossam,hossam_uploaded,marwan,nassim,ahmed_z,egyptian_female"
+    ).split(",") if item.strip()
+]
 
 PEXELS_SEARCH_ENDPOINT = "https://api.pexels.com/videos/search"
 BUFFER_ENDPOINT = "https://api.buffer.com"
@@ -312,14 +319,39 @@ def load_voice_profile_ids(path: Path | None = None) -> tuple[list[str], str]:
         raise PipelineError(f"Could not load voice profiles {path}: {exc}") from exc
 
 
-def choose_voice_profile(history: list[dict[str, Any]] | None = None) -> str:
+def choose_voice_profile(
+    history: list[dict[str, Any]] | None = None,
+    topic: Topic | dict[str, Any] | None = None,
+) -> str:
     profiles, default = load_voice_profile_ids()
+    if SILMA_REFERENCE_PROFILE and SILMA_REFERENCE_PROFILE.lower() != "auto":
+        if SILMA_REFERENCE_PROFILE not in profiles:
+            raise PipelineError(f"Unknown SILMA_REFERENCE_PROFILE {SILMA_REFERENCE_PROFILE!r}")
+        return SILMA_REFERENCE_PROFILE
     if not VOICE_ROTATION_ENABLED:
         selected = SILMA_REFERENCE_PROFILE or default
         if selected not in profiles:
             raise PipelineError(f"Unknown SILMA_REFERENCE_PROFILE {selected!r}")
         return selected
     history = history if history is not None else load_topic_history()
+    if VOICE_SELECTION_MODE == "content":
+        candidates = [profile for profile in AUTO_VOICE_PROFILES if profile in profiles] or profiles
+        current = topic if topic is not None else (history[-1] if history else {})
+        topic_text = " ".join(
+            str(current.get(field, "") if isinstance(current, dict) else getattr(current, field, ""))
+            for field in ("title", "narration_script", "narration")
+        )
+        female = re.search(r"(امرأة|فتاة|طفلة|زوجة|أميرة|ملكة|ممرضة)", topic_text)
+        if female and "egyptian_female" in candidates:
+            return "egyptian_female"
+        recent = {
+            str(item.get("voice_profile", ""))
+            for item in history[-3:]
+            if item.get("voice_profile")
+        }
+        available = [profile for profile in candidates if profile not in recent] or candidates
+        seed = topic_text.encode("utf-8")
+        return available[int.from_bytes(hashlib.sha256(seed).digest()[:4], "big") % len(available)]
     last_profile = next(
         (str(item.get("voice_profile", "")) for item in reversed(history)
          if str(item.get("voice_profile", "")) in profiles),
@@ -1428,7 +1460,7 @@ def run_pipeline() -> None:
         json.dumps(topic.__dict__, ensure_ascii=False, indent=2), encoding="utf-8"
     )
 
-    voice_profile = choose_voice_profile()
+    voice_profile = choose_voice_profile(topic=topic)
     topic.voice_profile = voice_profile
     (run_dir / "topic.json").write_text(
         json.dumps(topic.__dict__, ensure_ascii=False, indent=2), encoding="utf-8"

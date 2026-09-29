@@ -9,7 +9,7 @@ on:
       voice_profile:
         description: 'SILMA voice profile'
         required: false
-        default: 'mohamed_elbed'
+        default: 'auto'
         type: string
 
 concurrency:
@@ -139,6 +139,8 @@ jobs:
           FACT_CHECK_ENABLED: 'false'
           TOPIC_GENERATION_MAX_ATTEMPTS: '3'
           VOICE_ROTATION_ENABLED: 'true'
+          VOICE_SELECTION_MODE: 'content'
+          AUTO_VOICE_PROFILES: 'hossam,hossam_uploaded,marwan,nassim,ahmed_z,egyptian_female'
           MIN_SCENE_CLIPS: '4'
 
           # --- Topic history ---
@@ -155,7 +157,7 @@ jobs:
 
           # --- TTS ---
           TTS_ENGINE: 'silma'
-          SILMA_REFERENCE_PROFILE: ${{ inputs.voice_profile || 'mohamed_elbed' }}
+          SILMA_REFERENCE_PROFILE: ${{ inputs.voice_profile || 'auto' }}
           SILMA_VOICE_PROFILES_FILE: 'assets/voices/voice_profiles.json'
           SILMA_SPEED: '1.0'
           SILMA_MAX_ATTEMPTS: '2'
