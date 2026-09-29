@@ -159,12 +159,13 @@ jobs:
           TTS_ENGINE: 'silma'
           SILMA_REFERENCE_PROFILE: ${{ inputs.voice_profile || 'auto' }}
           SILMA_VOICE_PROFILES_FILE: 'assets/voices/voice_profiles.json'
-          SILMA_SPEED: '1.0'
+          # سرعة أعلى قليلًا حتى تكون القراءة سريعة وممتعة بدون ابتلاع الكلمات.
+          SILMA_SPEED: '1.15'
           SILMA_MAX_ATTEMPTS: '2'
           SILMA_MIN_SCORE: '0.6'
           SILMA_GUARD_ENABLED: 'true'
           SILMA_FALLBACK_TO_EDGE: 'true'
-          EDGE_TTS_RATE: '-8%'
+          EDGE_TTS_RATE: '+10%'
           EDGE_TTS_PITCH: '-5Hz'
           MUSIC_VOLUME: '0.07'
           DRY_RUN: 'false'

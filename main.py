@@ -103,7 +103,7 @@ OPENROUTER_MAX_ATTEMPTS = max(1, int(os.getenv("OPENROUTER_MAX_ATTEMPTS", "2")))
 
 TTS_ENGINE = os.getenv("TTS_ENGINE", "silma").strip().lower()
 TTS_VOICE = os.getenv("TTS_VOICE", "ar-EG-SalmaNeural")
-EDGE_TTS_RATE = os.getenv("EDGE_TTS_RATE", "-8%")
+EDGE_TTS_RATE = os.getenv("EDGE_TTS_RATE", "+10%")
 EDGE_TTS_PITCH = os.getenv("EDGE_TTS_PITCH", "-5Hz")
 SILMA_REFERENCE_WAV = Path(os.getenv("SILMA_REFERENCE_WAV", "assets/voice_reference_synthetic.wav"))
 SILMA_REFERENCE_TEXT = os.getenv("SILMA_REFERENCE_TEXT", "").strip()
@@ -112,7 +112,7 @@ SILMA_VOICE_PROFILES_FILE = Path(os.getenv("SILMA_VOICE_PROFILES_FILE", "assets/
 SILMA_SEED = int(os.getenv("SILMA_SEED", "42"))
 SILMA_MAX_ATTEMPTS = int(os.getenv("SILMA_MAX_ATTEMPTS", "2"))
 SILMA_MIN_SCORE = float(os.getenv("SILMA_MIN_SCORE", "0.6"))
-SILMA_SPEED = float(os.getenv("SILMA_SPEED", "1.0"))
+SILMA_SPEED = float(os.getenv("SILMA_SPEED", "1.15"))
 SILMA_GUARD_ENABLED = os.getenv("SILMA_GUARD_ENABLED", "true").lower() == "true"
 SILMA_GUARD_MIN_MATCH_WORDS = int(os.getenv("SILMA_GUARD_MIN_MATCH_WORDS", "2"))
 VOICE_ROTATION_ENABLED = os.getenv("VOICE_ROTATION_ENABLED", "true").lower() == "true"
