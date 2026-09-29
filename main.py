@@ -31,6 +31,7 @@ from typing import Any
 import requests
 from llm_gemini import GEMINI_API_KEY, gemini_chat, gemini_key_kind
 from tts_quality import enforce_text_quality, generate_silma_guarded, load_reference, resolve_reference_profile
+from arabic_guard import format_feedback, validate_narration
 from fact_check import fact_check_topic
 
 # ---------------------------------------------------------------------------
@@ -1512,6 +1513,9 @@ def run_pipeline() -> None:
         ),
     )
     topic.narration_script = _append_engagement_outro(topic.narration_script)
+    arabic_issues = validate_narration(topic.narration_script)
+    if arabic_issues:
+        raise PipelineError("Arabic narration guard rejected final script: " + format_feedback(arabic_issues))
     final_word_count = len(topic.narration_script.split())
     _validate_final_script_word_count(final_word_count)
     red_flag = find_content_red_flag(topic.narration_script)
