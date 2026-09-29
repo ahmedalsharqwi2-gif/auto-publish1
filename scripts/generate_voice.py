@@ -22,6 +22,15 @@ from arabic_tts_quality_checker import ArabicTTSQualityChecker
 
 log = logging.getLogger("pipeline")
 
+EDGE_FALLBACK_VOICE = os.getenv("EDGE_TTS_FALLBACK_VOICE", "ar-SA-HamedNeural")
+
+
+def edge_fallback_voice(voice: Optional[str]) -> str:
+    """Return a valid Edge voice when a Google voice was used as input."""
+    if voice and voice.startswith("ar-") and "Neural2" not in voice:
+        return voice
+    return EDGE_FALLBACK_VOICE
+
 
 class VoiceGenerator:
     """يولد الصوت من النصوص مع فحص الجودة."""
@@ -143,7 +152,7 @@ class VoiceGenerator:
         
         # Fallback to Edge TTS
         if self.edge_tts_available:
-            edge_voice = voice or "ar-SA-AmmarNeural"
+            edge_voice = edge_fallback_voice(voice)
             success, message = self.generate_with_edge_tts(text, output_path, edge_voice)
             if success:
                 log.info(f"Audio generation successful with Edge TTS: {message}")

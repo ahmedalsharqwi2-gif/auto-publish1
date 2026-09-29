@@ -3,6 +3,7 @@ import unittest
 from pathlib import Path
 
 from arabic_tts_quality_checker import ArabicTTSQualityChecker
+from scripts.generate_voice import edge_fallback_voice
 from tts_quality import enforce_text_quality, resolve_reference_profile
 
 
@@ -10,6 +11,10 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class NarrationTextQualityTests(unittest.TestCase):
+    def test_google_voice_is_mapped_to_valid_edge_voice(self):
+        self.assertEqual(edge_fallback_voice("ar-XA-Neural2-B"), "ar-SA-HamedNeural")
+        self.assertEqual(edge_fallback_voice("ar-SA-AmmarNeural"), "ar-SA-AmmarNeural")
+
     def test_special_character_report_does_not_crash(self):
         checker = ArabicTTSQualityChecker()
         score, issues, warnings = checker.check_text_quality("نص عربي @ $ % &")
