@@ -8,7 +8,7 @@ scripts/quality_check.py - فحص الجودة الشامل
 import os
 import logging
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple
 
 from arabic_grammar_fixer import ArabicGrammarFixer
 from arabic_tts_quality_checker import ArabicTTSQualityChecker, QualityReport
