@@ -40,7 +40,7 @@ class ArabicGuardTests(unittest.TestCase):
             path = Path(tmp) / "protected.json"
             path.write_text(
                 json.dumps(
-                    {"texts": [{"id": "test:1", "kind": "quran", "text": text, "sha256": digest}],
+                    {"texts": [{"id": "test:1", "kind": "quran", "text": text, "sha256": digest}]},
                     ensure_ascii=False,
                 ),
                 encoding="utf-8",
