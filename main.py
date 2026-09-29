@@ -483,6 +483,7 @@ def _openrouter_chat(messages: list[dict[str, str]], max_tokens: int, temperatur
             "max_tokens": max(max_tokens, 8000),
             "temperature": temperature,
             "reasoning": {"effort": "low", "exclude": True},
+            "response_format": {"type": "json_object"},
         }
         for attempt in range(1, OPENROUTER_MAX_ATTEMPTS + 1):
             try:
@@ -503,6 +504,11 @@ def _openrouter_chat(messages: list[dict[str, str]], max_tokens: int, temperatur
                 break
             data = resp.json()
             content = ((data.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
+            if isinstance(content, list):
+                content = "".join(
+                    item.get("text", "") if isinstance(item, dict) else str(item)
+                    for item in content
+                )
             if not content.strip():
                 last_error = f"{model}: empty content"
                 log.warning("OpenRouter %s returned empty content (attempt %d)", model, attempt)
@@ -599,7 +605,11 @@ def proofread_narration_tashkeel(
             {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
         ]
         raw_text = llm_chat(messages, max_tokens=LLM_MAX_COMPLETION_TOKENS, temperature=0.15)
-        parsed = extract_json_block(raw_text)
+        try:
+            parsed = extract_json_block(raw_text)
+        except PipelineError as exc:
+            log.warning("Editorial provider returned non-JSON; keeping the original script: %s", exc)
+            return script
         corrected = str(parsed.get("corrected_text", "")).strip()
         if not corrected:
             raise PipelineError("Editorial review returned an empty corrected_text")
