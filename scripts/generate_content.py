@@ -154,12 +154,16 @@ class ContentGenerator:
 
         try:
             fixed_narration = ""
-            for attempt in range(3):
+            for attempt in range(5):
                 request = prompt
                 if attempt:
+                    current_count = len(fixed_narration.split())
+                    missing = max(0, self.min_words - current_count)
                     request = (
-                        f"أعد كتابة النص كاملًا بين {self.min_words} و{self.max_words} كلمة بالضبط، "
-                        "ولا تختصره. حافظ على الخطاف والشرح والنتيجة المفاجئة.\n\n"
+                        f"النص السابق عدد كلماته {current_count}، وينقصه {missing} كلمة على الأقل. "
+                        f"أعد النص كاملًا بين {self.min_words} و{self.max_words} كلمة، "
+                        "وأضف شرحًا علميًا وأمثلة مرتبطة بالموضوع بدل الحشو. "
+                        "لا تختصره ولا تُرجع ملاحظات خارج النص.\n\n"
                         f"النص السابق:\n{fixed_narration}"
                     )
                 response = llm_chat([{"role": "user", "content": request}])

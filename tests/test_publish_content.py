@@ -5,10 +5,16 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from scripts.publish_content import ContentPublisher
+from scripts.publish_content import ContentPublisher, build_social_description
 
 
 class PublisherTests(unittest.TestCase):
+    def test_social_description_has_topic_body_and_hashtags(self):
+        text = build_social_description("ثقب أسود في الفضاء", "شرح علمي مختصر")
+        self.assertIn("ثقب أسود في الفضاء", text)
+        self.assertIn("شرح علمي مختصر", text)
+        self.assertIn("#علوم", text)
+        self.assertIn("#فضاء", text)
     def test_channel_map_accepts_json_and_positional_values(self):
         self.assertEqual(
             ContentPublisher._channel_map(

@@ -22,6 +22,18 @@ GITHUB_API = "https://api.github.com"
 DEFAULT_SERVICES = ("youtube", "tiktok", "instagram")
 
 
+def build_social_description(topic: str, narration: str) -> str:
+    """Create non-empty platform metadata even when the model omits caption."""
+    topic = " ".join(str(topic or "").split()).strip() or "اكتشاف علمي جديد"
+    narration = " ".join(str(narration or "").split()).strip()
+    body = narration[:4000] if narration else topic
+    tags = ["#علوم", "#معلومة_علمية", "#اكتشافات"]
+    lowered = topic.lower()
+    if any(word in lowered for word in ("فضاء", "كون", "كوكب", "نجمة", "ثقب")):
+        tags.insert(1, "#فضاء")
+    return f"{topic}\n\n{body}\n\n{' '.join(dict.fromkeys(tags))}"
+
+
 class ContentPublisher:
     """Upload media and create verified, scheduled Buffer posts."""
 

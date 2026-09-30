@@ -27,6 +27,7 @@ from scripts import (
     ContentPublisher,
 )
 from scripts.assemble_video import assemble_video, probe_duration
+from scripts.publish_content import build_social_description
 
 MIN_AUDIO_SECONDS = float(os.getenv("MIN_AUDIO_SECONDS", "60"))
 MAX_AUDIO_SECONDS = float(os.getenv("MAX_AUDIO_SECONDS", "90"))
@@ -123,8 +124,13 @@ class AutoPublishPipeline:
             # Step 7: Publish
             log.info("\n[Step 7] Publishing content...")
             title = topic[:60]
-            description = f"{narration[:200]}...\n\n#المحتوى_المولد_آلياً #الذكاء_الاصطناعي"
+            description = build_social_description(topic, narration)
             channels = os.getenv("PUBLISH_CHANNELS", "youtube,tiktok,instagram").split(",")
+
+            if os.getenv("PUBLISH_DRY_RUN", "false").lower() == "true":
+                log.info("DRY RUN: skipping external publication")
+                log.info("DRY RUN metadata: %s", description[:500])
+                return True
 
             publish_success = self.publisher.publish_to_buffer(
                 video_path=video_path,

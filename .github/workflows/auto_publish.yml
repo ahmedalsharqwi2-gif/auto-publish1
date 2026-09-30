@@ -11,6 +11,11 @@ on:
         required: false
         default: 'auto'
         type: string
+      dry_run:
+        description: 'Build and validate without publishing externally'
+        required: false
+        default: false
+        type: boolean
 
 concurrency:
   group: auto-publish-voice-rotation
@@ -164,6 +169,7 @@ jobs:
           MIN_WORDS: '105'
           MAX_WORDS: '150'
           PUBLISH_CHANNELS: 'youtube,tiktok,instagram'
+          PUBLISH_DRY_RUN: ${{ inputs.dry_run || false }}
           BUFFER_SCHEDULE_MODE: 'addToQueue'
           REQUIRE_EXTERNAL_SOURCES: 'false'
           EDITORIAL_REVIEW_ENABLED: 'true'
