@@ -25,6 +25,10 @@ class ContentGeneratorTopicPolicyTests(unittest.TestCase):
         raw = r'{"narration":"نص عربي.\\nجملة ثانية."}'
         self.assertEqual(normalize_narration_response(raw), "نص عربي.\nجملة ثانية.")
 
+    def test_normalize_narration_response_extracts_malformed_json_like_wrapper(self):
+        raw = '{"narration": "نص عربي عن النوم", "extra": {"x": 1}} trailing'
+        self.assertEqual(normalize_narration_response(raw), "نص عربي عن النوم")
+
     def test_channel_brief_and_topic_bank_are_used(self):
         with patch(
             "scripts.generate_content.llm_chat",

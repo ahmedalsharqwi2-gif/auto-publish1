@@ -81,7 +81,16 @@ def normalize_narration_response(response: str) -> str:
         elif isinstance(payload, str):
             text = payload
     except json.JSONDecodeError:
-        pass
+        # Gemini sometimes returns a JSON-like wrapper with unescaped quotes.
+        # Extract the narration value instead of sending {",:} to TTS checks.
+        match = re.search(r'"(?:narration|script|text)"\s*:\s*"((?:\\.|[^"\\])*)"', text, re.DOTALL)
+        if match:
+            try:
+                text = json.loads('"' + match.group(1) + '"')
+            except json.JSONDecodeError:
+                text = match.group(1).replace('\\"', '"').replace('\\n', '\n')
+        else:
+            text = re.sub(r'^\s*(?:نص السرد|النص|NARRATION|narration)\s*:\s*', '', text, flags=re.IGNORECASE)
     text = text.replace("\\n", "\n").replace("\\t", " ").replace('\\"', '"')
     text = re.sub(r"[*_`]", "", text)
     return text.strip().strip('"«»')
@@ -128,14 +137,17 @@ class ContentGenerator:
         """توليد النص الروائي."""
         log.info("Generating narration for topic")
         
-        prompt = f"""اكتب نصاً روائياً بالعربية الفصحى حول: {topic}
+        prompt = f"""اكتب نصاً علمياً قصيراً وحيوياً بالعربية الفصحى حول: {topic}
 
 المتطلبات:
 - يكون النص بين {self.min_words}-{self.max_words} كلمة
 - استخدم لغة واضحة وسهلة النطق
 - تجنب الكلمات الأجنبية والأرقام
 - اجعل التشكيل (الحركات) على معظم الكلمات
-- الجمل قصيرة ومفهومة
+- ابدأ بخطاف أو سؤال علمي واضح في أول جملة، من دون تحية أو مقدمة عامة
+- اتبع بنية: معلومة أو مفارقة، ثم شرح مبسط، ثم نتيجة مفاجئة أو تطبيق يومي
+- اجعل الجمل قصيرة ومفهومة، وكل جملة تحمل معلومة واحدة قابلة للعرض بصرياً
+- لا تكرر الفكرة أو الكلمات، ولا تكتب بأسلوب مقال مدرسي
 - بدون رموز خاصة
 
 النص:"""
