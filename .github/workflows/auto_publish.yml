@@ -158,7 +158,10 @@ jobs:
           GEMINI_THINKING_LEVEL: 'low'
           GEMINI_MIN_OUTPUT_TOKENS: '0'
           GEMINI_RETRIES: '3'
-          LLM_MAX_COMPLETION_TOKENS: '4000'
+          # 105–150 Arabic words fit comfortably below this cap and the
+          # smaller request avoids OpenRouter HTTP 402 when only limited
+          # credits remain.
+          LLM_MAX_COMPLETION_TOKENS: '1200'
           LLM_TIMEOUT: '45'
 
           # --- LLM provider: OpenRouter (optional fallback only) ---
