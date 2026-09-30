@@ -65,17 +65,12 @@ class ArabicTTSQualityChecker:
             tashkeel_ratio = tashkeel_words / len(arabic_words)
             if tashkeel_ratio < 0.5:
                 warnings.append(f"التشكيل ناقص: {tashkeel_ratio:.0%} من الكلمات مشكولة")
-                score *= 0.85
-            elif tashkeel_ratio < 0.3:
-                issues.append(f"التشكيل ناقص جدًا: {tashkeel_ratio:.0%}")
-                score *= 0.5
 
         # Check 3: Sentence length
         sentences = re.split(r'[.!؟؛]+', text)
         long_sentences = [s for s in sentences if len(s.split()) > 25]
         if long_sentences:
             warnings.append(f"{len(long_sentences)} جملة طويلة قد تسبب اختلال الإيقاع")
-            score *= 0.9
 
         # Check 4: Repeated words
         words_lower = [w.lower() for w in re.findall(r'\w+', text)]
@@ -86,7 +81,6 @@ class ArabicTTSQualityChecker:
         repeated = [w for w, c in word_counts.items() if c >= 5]
         if repeated:
             warnings.append(f"كلمات مكررة كثيرًا: {', '.join(repeated[:3])}")
-            score *= 0.9
 
         # Check 5: Special characters
         special_chars = re.findall(r'[^\u0621-\u064A\s\u064B-\u0652.!؟؛،]', text)
