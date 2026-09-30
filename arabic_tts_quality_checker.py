@@ -8,15 +8,24 @@ arabbic TTS Quality Checker - فاحص جودة النطق العربي
 from __future__ import annotations
 
 import re
+import difflib
 import logging
 import subprocess
 import json
 import os
 from pathlib import Path
 from dataclasses import dataclass
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Tuple
 
 log = logging.getLogger("pipeline")
+
+ASR_MIN_MATCH_RATIO = float(os.getenv("ASR_MIN_MATCH_RATIO", "0.82"))
+
+
+def _arabic_words(text: str) -> list[str]:
+    text = re.sub(r"[\u0610-\u061A\u064B-\u065F\u0670]", "", text or "")
+    text = re.sub(r"[^\w\u0600-\u06FF]+", " ", text, flags=re.UNICODE)
+    return [word.lower() for word in text.split() if word]
 
 
 @dataclass
@@ -105,7 +114,6 @@ class ArabicTTSQualityChecker:
 
         try:
             from faster_whisper import WhisperModel
-            import numpy as np
             from scipy.io import wavfile
         except ImportError:
             log.warning("faster-whisper or scipy not available, skipping audio quality check")
@@ -142,6 +150,29 @@ class ArabicTTSQualityChecker:
             if not (0.8 <= duration_ratio <= 1.3):
                 issues.append(f"مدة الصوت غير متوقعة: {duration:.1f}s (متوقع ~{expected_duration:.1f}s)")
                 score *= 0.8
+
+            model = WhisperModel(
+                os.getenv("WHISPER_MODEL", "base"), device="cpu", compute_type="int8"
+            )
+            result = model.transcribe(
+                str(audio_path), language="ar", word_timestamps=False, vad_filter=False
+            )
+            segments = result[0] if isinstance(result, (tuple, list)) else result
+            heard = _arabic_words(" ".join(getattr(seg, "text", "") or "" for seg in segments))
+            expected = _arabic_words(expected_text)
+            if not heard or not expected:
+                issues.append("بوابة ASR لم تستخرج كلمات عربية قابلة للمقارنة")
+                score *= 0.3
+            else:
+                matcher = difflib.SequenceMatcher(None, expected, heard, autojunk=False)
+                matched = sum(block.size for block in matcher.get_matching_blocks())
+                ratio = matched / len(expected)
+                log.info("Arabic ASR match: %d/%d (%.1f%%)", matched, len(expected), ratio * 100)
+                if ratio < ASR_MIN_MATCH_RATIO:
+                    issues.append(
+                        f"تطابق النطق العربي منخفض: {ratio:.1%}، المطلوب {ASR_MIN_MATCH_RATIO:.1%}"
+                    )
+                    score *= 0.3
 
         except Exception as e:
             log.error(f"Error checking audio duration: {e}")

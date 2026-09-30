@@ -191,6 +191,8 @@ jobs:
           SILMA_MAX_ATTEMPTS: '2'
           SILMA_MIN_SCORE: '0.6'
           SILMA_GUARD_ENABLED: 'true'
+          WHISPER_MODEL: 'base'
+          ASR_MIN_MATCH_RATIO: '0.82'
           SILMA_FALLBACK_TO_EDGE: 'true'
           EDGE_TTS_RATE: '+5%'
           EDGE_TTS_PITCH: '-5Hz'

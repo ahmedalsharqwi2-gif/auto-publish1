@@ -18,8 +18,18 @@ class NarrationTextQualityTests(unittest.TestCase):
     def test_mp3_duration_uses_ffprobe(self, run):
         run.return_value.stdout = "180.0\n"
         checker = ArabicTTSQualityChecker(min_acceptable_score=0.0)
+        class FakeSegment:
+            text = " ".join(["كلمة"] * 288)
+
+        class FakeWhisperModel:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def transcribe(self, *args, **kwargs):
+                return iter([FakeSegment()]), object()
+
         fake_whisper = types.ModuleType("faster_whisper")
-        fake_whisper.WhisperModel = object
+        fake_whisper.WhisperModel = FakeWhisperModel
         fake_numpy = types.ModuleType("numpy")
         fake_scipy = types.ModuleType("scipy")
         fake_scipy.__path__ = []
