@@ -80,12 +80,23 @@ def search_portrait_videos(api_key: str, query: str, per_page: int = 80) -> list
 
 
 def _download(url: str, destination: Path) -> None:
-    with requests.get(url, stream=True, timeout=60) as response:
-        response.raise_for_status()
-        with destination.open("wb") as output:
-            for chunk in response.iter_content(chunk_size=1024 * 1024):
-                if chunk:
-                    output.write(chunk)
+    last_error: Exception | None = None
+    for attempt in range(1, 4):
+        try:
+            destination.unlink(missing_ok=True)
+            with requests.get(url, stream=True, timeout=(20, 180)) as response:
+                response.raise_for_status()
+                with destination.open("wb") as output:
+                    for chunk in response.iter_content(chunk_size=1024 * 1024):
+                        if chunk:
+                            output.write(chunk)
+            if destination.stat().st_size > 0:
+                return
+        except (OSError, requests.RequestException) as exc:
+            last_error = exc
+            print(f"⚠️ إعادة تنزيل مقطع Pexels {attempt}/3 بعد انقطاع الشبكة.")
+    if last_error:
+        raise last_error
 
 
 def _normalize_clip(source: Path, destination: Path, duration: float) -> None:
