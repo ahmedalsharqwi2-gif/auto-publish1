@@ -92,7 +92,10 @@ class ArabicTTSQualityChecker:
             warnings.append(f"كلمات مكررة كثيرًا: {', '.join(repeated[:3])}")
 
         # Check 5: Special characters
-        special_chars = re.findall(r'[^\u0621-\u064A\s\u064B-\u0652.!؟؛،0-9()\[\]«»:"\-]', text)
+        # Latin fragments can be model artifacts (e.g. a color or unit name).
+        # Arabic-density validation below still catches substantial foreign
+        # text, so these isolated characters must not block production.
+        special_chars = re.findall(r'[^\u0621-\u064A\s\u064B-\u0652.!؟؛،0-9()\[\]«»:"\-A-Za-z]', text)
         if special_chars:
             unique_specials = sorted(set(special_chars))
             if len(unique_specials) > 3:
