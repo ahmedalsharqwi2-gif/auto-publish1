@@ -175,6 +175,7 @@ jobs:
           LLM_FALLBACK_API_KEY: ${{ secrets.LLM_FALLBACK_API_KEY || secrets.GROQ_API_KEY }}
           LLM_FALLBACK_ENDPOINT: ${{ vars.LLM_FALLBACK_ENDPOINT || 'https://api.groq.com/openai/v1/chat/completions' }}
           LLM_FALLBACK_MODEL: 'openai/gpt-oss-120b'
+          LLM_FALLBACK_REASONING_EFFORT: 'low'
           LLM_FALLBACK_RETRIES: '2'
           FALLBACK_RATE_LIMIT: '0.5'
           FALLBACK_RATE_BURST: '1'

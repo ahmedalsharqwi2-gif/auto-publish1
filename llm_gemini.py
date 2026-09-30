@@ -60,6 +60,7 @@ FALLBACK_ENDPOINT = os.getenv(
 )
 FALLBACK_MODEL = os.getenv("LLM_FALLBACK_MODEL", "llama-3.3-70b-versatile")
 FALLBACK_RETRIES = max(1, int(os.getenv("LLM_FALLBACK_RETRIES", "2")))
+FALLBACK_REASONING_EFFORT = os.getenv("LLM_FALLBACK_REASONING_EFFORT", "low").strip()
 
 
 def gemini_key_kind() -> str:
@@ -351,6 +352,7 @@ def _fallback_chat_once(messages, max_tokens, temperature, timeout) -> str:
             "messages": messages,
             "max_tokens": max_tokens,
             "temperature": temperature,
+            **({"reasoning_effort": FALLBACK_REASONING_EFFORT} if FALLBACK_REASONING_EFFORT else {}),
         },
         timeout=timeout,
     )

@@ -79,6 +79,22 @@ class GeminiTokenBudgetTests(unittest.TestCase):
         body = post.call_args.kwargs["json"]
         self.assertEqual(body["generationConfig"]["maxOutputTokens"], 4000)
 
+    def test_fallback_requests_low_reasoning_effort(self):
+        response = SimpleNamespace(
+            status_code=200,
+            text="",
+            json=lambda: {"choices": [{"message": {"content": "ok"}}]},
+        )
+        with patch.object(llm_gemini, "FALLBACK_API_KEY", "fallback-test"), \
+             patch.object(llm_gemini.requests, "post", return_value=response) as post:
+            llm_gemini._fallback_chat_once(
+                [{"role": "user", "content": "test"}],
+                max_tokens=100,
+                temperature=0.2,
+                timeout=1,
+            )
+        self.assertEqual(post.call_args.kwargs["json"]["reasoning_effort"], "low")
+
     def test_explicit_minimum_can_raise_requested_budget(self):
         response = SimpleNamespace(
             status_code=200,
