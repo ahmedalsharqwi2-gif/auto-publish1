@@ -112,6 +112,9 @@ class ArabicTTSQualityChecker:
     def check_audio_quality(self, audio_path: Path, expected_text: str) -> Tuple[float, List[str]]:
         """Check audio quality (requires faster-whisper)."""
         issues = []
+        # Diagnostic warnings (duration/ASR mismatch) must not be confused
+        # with fatal issues; the explicit audio-duration gate is authoritative.
+        warnings = []
         score = 1.0
 
         try:
