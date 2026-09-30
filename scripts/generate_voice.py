@@ -24,7 +24,12 @@ from tts_quality import generate_silma_guarded, resolve_reference_profile
 
 log = logging.getLogger("pipeline")
 
-EDGE_FALLBACK_VOICE = os.getenv("EDGE_TTS_FALLBACK_VOICE", "ar-SA-HamedNeural")
+# Honor the repository-specific Edge voice when production selects Edge;
+# never silently replace it with the historical Hamed fallback.
+EDGE_FALLBACK_VOICE = os.getenv(
+    "EDGE_TTS_VOICE",
+    os.getenv("EDGE_TTS_FALLBACK_VOICE", "ar-SA-HamedNeural"),
+)
 
 
 def normalize_edge_pitch(value: object) -> str:
@@ -190,7 +195,8 @@ class VoiceGenerator:
         
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
-        if os.getenv("TTS_ENGINE", "google").strip().lower() == "silma":
+        configured_engine = os.getenv("TTS_ENGINE", engine).strip().lower()
+        if configured_engine == "silma":
             try:
                 profile = select_silma_profile()
                 config_path = Path(os.getenv("SILMA_VOICE_PROFILES_FILE", "assets/voices/voice_profiles.json"))
@@ -209,7 +215,18 @@ class VoiceGenerator:
             except Exception as exc:
                 log.warning("SILMA generation failed, trying Google/Edge fallback: %s", exc)
         
-        # Try Google Cloud TTS first
+        # Edge is an explicit production engine in the free workflow. Skip
+        # Google probing and use the configured per-repository Edge voice.
+        if configured_engine == "edge":
+            edge_voice = voice or os.getenv("EDGE_TTS_VOICE") or EDGE_FALLBACK_VOICE
+            success, message = self.generate_with_edge_tts(text, output_path, edge_voice)
+            if success:
+                log.info(f"Audio generation successful with Edge TTS: {message}")
+                return output_path, True
+            log.error(f"Edge TTS failed: {message}")
+            return output_path, False
+
+        # Try Google Cloud TTS first for the legacy/default path
         if engine == "google" or not voice:
             voice = voice or 'ar-XA-Neural2-B'
             success, message = self.generate_with_google_cloud(text, output_path, voice)
