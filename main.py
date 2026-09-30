@@ -104,6 +104,7 @@ class AutoPublishPipeline:
                 output_path,
                 checked_text,
                 Path("output/final_video.mp4"),
+                topic=topic,
             )
             log.info(f"✓ Video assembled: {video_path}")
 

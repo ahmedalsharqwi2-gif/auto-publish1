@@ -3,7 +3,10 @@ from __future__ import annotations
 
 import re
 import subprocess
+import os
 from pathlib import Path
+
+from scripts.pexels_video import build_pexels_track
 
 VIDEO_WIDTH = 1080
 VIDEO_HEIGHT = 1920
@@ -86,22 +89,31 @@ def _filter_path(path: Path) -> str:
     return str(path.resolve()).replace("\\", "/").replace(":", r"\:").replace("'", r"\'")
 
 
-def assemble_video(audio_path: Path, narration: str, output_path: Path) -> Path:
-    """Create a 9:16 MP4 with a dark animated waveform and Arabic captions."""
+def assemble_video(audio_path: Path, narration: str, output_path: Path, topic: str = "") -> Path:
+    """Create a 9:16 MP4 with Pexels footage and Arabic captions."""
     duration = probe_duration(audio_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     ass_path = output_path.with_suffix(".ass")
     write_ass_subtitles(narration, duration, ass_path)
     subtitles = _filter_path(ass_path)
-    filter_complex = (
-        f"[1:a]showwaves=s=900x240:mode=cline:colors=0x38bdf8@0.9:rate={FPS},format=rgba[wave];"
-        f"[0:v][wave]overlay=90:220:format=auto,subtitles='{subtitles}':fontsdir='/usr/share/fonts/truetype/dejavu'[v]"
-    )
+    pexels_track = output_path.with_suffix(".pexels.mp4")
+    has_pexels = build_pexels_track(os.getenv("PEXELS_API_KEY", "").strip(), topic, duration, pexels_track)
+    if has_pexels:
+        input_args = ["-i", str(pexels_track), "-i", str(audio_path)]
+        filter_complex = f"[0:v]subtitles='{subtitles}':fontsdir='/usr/share/fonts/truetype/dejavu'[v]"
+    else:
+        input_args = [
+            "-f", "lavfi", "-i", f"color=c=0x0b1220:s={VIDEO_WIDTH}x{VIDEO_HEIGHT}:r={FPS}:d={duration:.3f}",
+            "-i", str(audio_path),
+        ]
+        filter_complex = (
+            f"[1:a]showwaves=s=900x240:mode=cline:colors=0x38bdf8@0.9:rate={FPS},format=rgba[wave];"
+            f"[0:v][wave]overlay=90:220:format=auto,subtitles='{subtitles}':fontsdir='/usr/share/fonts/truetype/dejavu'[v]"
+        )
     subprocess.run(
         [
             "ffmpeg", "-y",
-            "-f", "lavfi", "-i", f"color=c=0x0b1220:s={VIDEO_WIDTH}x{VIDEO_HEIGHT}:r={FPS}:d={duration:.3f}",
-            "-i", str(audio_path),
+            *input_args,
             "-filter_complex", filter_complex,
             "-map", "[v]", "-map", "1:a:0",
             "-t", f"{duration:.3f}",
@@ -112,4 +124,5 @@ def assemble_video(audio_path: Path, narration: str, output_path: Path) -> Path:
         check=True,
     )
     ass_path.unlink(missing_ok=True)
+    pexels_track.unlink(missing_ok=True)
     return output_path
