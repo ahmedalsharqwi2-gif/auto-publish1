@@ -1,0 +1,19 @@
+import unittest
+
+from scripts.pexels_video import CLIP_SECONDS, MIN_CLIPS, visual_queries
+
+
+class PexelsVideoTests(unittest.TestCase):
+    def test_space_topic_uses_only_related_queries(self):
+        queries = visual_queries("رحلة إلى الفضاء والنجوم")
+        self.assertGreaterEqual(len(queries), 3)
+        self.assertTrue(all(any(word in query for word in ("space", "astronomy", "nebula", "planet")) for query in queries))
+
+    def test_long_video_requires_more_than_ten_unique_clips(self):
+        required = max(MIN_CLIPS, int(90 / CLIP_SECONDS + 0.999))
+        self.assertGreater(required, 10)
+        self.assertEqual(required, 15)
+
+
+if __name__ == "__main__":
+    unittest.main()

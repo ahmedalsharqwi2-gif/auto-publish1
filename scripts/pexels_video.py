@@ -1,6 +1,7 @@
-"""Download and prepare portrait stock clips from the Pexels video API."""
+"""Download and prepare topic-specific portrait clips from the Pexels API."""
 from __future__ import annotations
 
+import math
 import os
 import subprocess
 from pathlib import Path
@@ -9,25 +10,44 @@ from urllib.parse import urlparse
 import requests
 
 PEXELS_SEARCH_URL = "https://api.pexels.com/videos/search"
+CLIP_SECONDS = 6.0
+MIN_CLIPS = 11
+MAX_CLIPS = 30
+
+
+def visual_queries(topic: str) -> list[str]:
+    """Return several closely related English queries for the Arabic topic."""
+    text = (topic or "").lower()
+    mapping = (
+        (("فضاء", "فلك", "نجوم", "كواكب", "كون"), [
+            "space stars galaxy", "astronomy telescope", "nebula planets night sky",
+        ]),
+        (("محيط", "بحر", "أعماق", "ماء"), [
+            "ocean underwater", "deep sea marine life", "waves coral reef",
+        ]),
+        (("طبيعة", "غابة", "حيوان", "حيوانات"), [
+            "nature forest wildlife", "mountain landscape river", "animals close up nature",
+        ]),
+        (("طب", "جسم", "دماغ", "مرض"), [
+            "medical laboratory", "human body science", "microscope cells research",
+        ]),
+        (("هندسة", "فيزياء", "تقنية", "اختراع", "روبوت"), [
+            "technology science laboratory", "robot engineering machine", "physics experiment energy",
+        ]),
+    )
+    for words, queries in mapping:
+        if any(word in text for word in words):
+            return queries
+    default = os.getenv("PEXELS_DEFAULT_QUERY", "science laboratory technology")
+    return [default, "scientific research laboratory", "technology experiment"]
 
 
 def visual_query(topic: str) -> str:
-    """Map Arabic editorial topics to stable English stock-video queries."""
-    text = (topic or "").lower()
-    mapping = (
-        (("فضاء", "فلك", "نجوم", "كواكب", "كون"), "space stars galaxy"),
-        (("محيط", "بحر", "أعماق", "ماء"), "ocean underwater"),
-        (("طبيعة", "غابة", "حيوان", "حيوانات"), "nature forest wildlife"),
-        (("طب", "جسم", "دماغ", "مرض"), "medical laboratory human body"),
-        (("هندسة", "فيزياء", "تقنية", "اختراع", "روبوت"), "technology science laboratory"),
-    )
-    for words, query in mapping:
-        if any(word in text for word in words):
-            return query
-    return os.getenv("PEXELS_DEFAULT_QUERY", "science technology nature")
+    """Backward-compatible primary query used by callers and tests."""
+    return visual_queries(topic)[0]
 
 
-def search_portrait_videos(api_key: str, query: str, per_page: int = 15) -> list[str]:
+def search_portrait_videos(api_key: str, query: str, per_page: int = 40) -> list[str]:
     response = requests.get(
         PEXELS_SEARCH_URL,
         headers={"Authorization": api_key},
@@ -40,7 +60,9 @@ def search_portrait_videos(api_key: str, query: str, per_page: int = 15) -> list
         files = video.get("video_files") or []
         candidates = [
             item for item in files
-            if item.get("link") and item.get("width", 0) >= 540 and item.get("height", 0) >= item.get("width", 0)
+            if item.get("link")
+            and item.get("width", 0) >= 540
+            and item.get("height", 0) >= item.get("width", 0)
         ]
         candidates.sort(key=lambda item: (item.get("width", 0), item.get("height", 0)), reverse=True)
         if candidates:
@@ -71,36 +93,57 @@ def _normalize_clip(source: Path, destination: Path, duration: float) -> None:
 
 
 def build_pexels_track(api_key: str, topic: str, duration: float, output_path: Path) -> bool:
-    """Build a full-length portrait track; return False for safe visual fallback."""
+    """Build a full-length track from unique, topic-specific clips only."""
     if not api_key:
         return False
     workdir = output_path.parent / "pexels_clips"
     workdir.mkdir(parents=True, exist_ok=True)
+    required = max(MIN_CLIPS, math.ceil(duration / CLIP_SECONDS))
     try:
-        urls = search_portrait_videos(api_key, visual_query(topic))
-        if not urls:
+        urls: list[str] = []
+        seen: set[str] = set()
+        for query in visual_queries(topic):
+            for url in search_portrait_videos(api_key, query):
+                if url not in seen:
+                    seen.add(url)
+                    urls.append(url)
+                if len(urls) >= min(MAX_CLIPS, required + 5):
+                    break
+            if len(urls) >= min(MAX_CLIPS, required + 5):
+                break
+        if len(urls) < required:
+            print(f"⚠️ Pexels أعاد {len(urls)} مقاطع فقط، والمطلوب {required} مقطعًا؛ لن نكرر مقطعًا.")
             return False
-        remaining = duration
+
         normalized: list[Path] = []
-        for index, url in enumerate(urls[:5]):
+        remaining = duration
+        for index, url in enumerate(urls[:required]):
             if remaining <= 0:
                 break
             suffix = Path(urlparse(url).path).suffix or ".mp4"
             raw = workdir / f"raw_{index}{suffix}"
             clip = workdir / f"clip_{index}.mp4"
-            _download(url, raw)
-            segment_duration = min(8.0, remaining)
-            _normalize_clip(raw, clip, segment_duration)
-            normalized.append(clip)
-            remaining -= segment_duration
-        if not normalized:
+            try:
+                _download(url, raw)
+                segment_duration = min(CLIP_SECONDS, remaining)
+                _normalize_clip(raw, clip, segment_duration)
+                normalized.append(clip)
+                remaining -= segment_duration
+            except (OSError, requests.RequestException, subprocess.CalledProcessError) as exc:
+                print(f"⚠️ تخطي مقطع Pexels غير صالح ({exc}).")
+
+        if len(normalized) < required or remaining > 0.05:
+            print(f"⚠️ تم تجهيز {len(normalized)} مقاطع فقط؛ لن نعيد أي مقطع لتغطية المدة.")
             return False
-        # If the API returned too little footage, loop the prepared visual track.
+
         concat_list = workdir / "concat.txt"
-        concat_list.write_text("\n".join(f"file '{path.resolve()}'" for path in normalized) + "\n", encoding="utf-8")
+        concat_list.write_text(
+            "\n".join(f"file '{path.resolve()}'" for path in normalized) + "\n",
+            encoding="utf-8",
+        )
         subprocess.run(
             [
-                "ffmpeg", "-y", "-v", "error", "-stream_loop", "-1", "-f", "concat", "-safe", "0",
+                "ffmpeg", "-y", "-v", "error", "-f", "concat", "-safe", "0",
                 "-i", str(concat_list), "-t", f"{duration:.3f}", "-an",
                 "-c:v", "libx264", "-preset", "veryfast", "-crf", "24", "-pix_fmt", "yuv420p",
                 str(output_path),
