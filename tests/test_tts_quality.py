@@ -1,6 +1,9 @@
 import json
+import sys
+import types
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from arabic_tts_quality_checker import ArabicTTSQualityChecker
 from scripts.generate_voice import edge_fallback_voice
@@ -11,6 +14,34 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class NarrationTextQualityTests(unittest.TestCase):
+    @patch("arabic_tts_quality_checker.subprocess.run")
+    def test_mp3_duration_uses_ffprobe(self, run):
+        run.return_value.stdout = "180.0\n"
+        checker = ArabicTTSQualityChecker(min_acceptable_score=0.0)
+        fake_whisper = types.ModuleType("faster_whisper")
+        fake_whisper.WhisperModel = object
+        fake_numpy = types.ModuleType("numpy")
+        fake_scipy = types.ModuleType("scipy")
+        fake_scipy.__path__ = []
+        fake_scipy_io = types.ModuleType("scipy.io")
+        fake_scipy_io.__path__ = []
+        fake_wavfile = types.ModuleType("scipy.io.wavfile")
+        fake_wavfile.read = lambda _: (16000, [])
+        fake_scipy_io.wavfile = fake_wavfile
+        with patch.dict(sys.modules, {
+            "faster_whisper": fake_whisper,
+            "numpy": fake_numpy,
+            "scipy": fake_scipy,
+            "scipy.io": fake_scipy_io,
+            "scipy.io.wavfile": fake_wavfile,
+        }), patch.object(Path, "exists", return_value=True):
+            score, issues = checker.check_audio_quality(
+                Path("sample.mp3"), " ".join(["كلمة"] * 375)
+            )
+        self.assertEqual(score, 1.0)
+        self.assertEqual(issues, [])
+        self.assertEqual(run.call_args.args[0][0], "ffprobe")
+
     def test_google_voice_is_mapped_to_valid_edge_voice(self):
         self.assertEqual(edge_fallback_voice("ar-XA-Neural2-B"), "ar-SA-HamedNeural")
         self.assertEqual(edge_fallback_voice("ar-SA-AmmarNeural"), "ar-SA-AmmarNeural")

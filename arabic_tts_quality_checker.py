@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import re
 import logging
+import subprocess
 import json
 from pathlib import Path
 from dataclasses import dataclass
@@ -124,9 +125,19 @@ class ArabicTTSQualityChecker:
                 sample_rate, audio_data = wavfile.read(str(audio_path))
                 duration = len(audio_data) / sample_rate
             else:
-                # For MP3 files, use simple estimation
-                file_size = audio_path.stat().st_size
-                duration = file_size / (128 * 1024)  # Rough estimate for 128kbps MP3
+                # MP3 bitrate is not fixed across SILMA/Google/Edge outputs;
+                # file-size estimation caused false failures (e.g. 42s for a
+                # multi-minute SILMA file). Read the container duration.
+                probe = subprocess.run(
+                    [
+                        "ffprobe", "-v", "error", "-show_entries", "format=duration",
+                        "-of", "default=noprint_wrappers=1:nokey=1", str(audio_path),
+                    ],
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                )
+                duration = float(probe.stdout.strip())
 
             expected_words = len(expected_text.split())
             expected_duration = expected_words / 2.5  # Average 2.5 words per second in Arabic
