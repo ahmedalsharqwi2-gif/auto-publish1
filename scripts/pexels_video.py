@@ -47,11 +47,13 @@ def visual_query(topic: str) -> str:
     return visual_queries(topic)[0]
 
 
-def search_portrait_videos(api_key: str, query: str, per_page: int = 40) -> list[str]:
+def search_portrait_videos(api_key: str, query: str, per_page: int = 80) -> list[str]:
     response = requests.get(
         PEXELS_SEARCH_URL,
         headers={"Authorization": api_key},
-        params={"query": query, "orientation": "portrait", "size": "large", "per_page": per_page},
+        # Do not restrict the API to portrait: relevant landscape footage is
+        # safely center-cropped to 9:16 by _normalize_clip below.
+        params={"query": query, "size": "large", "per_page": per_page},
         timeout=30,
     )
     response.raise_for_status()
@@ -62,9 +64,16 @@ def search_portrait_videos(api_key: str, query: str, per_page: int = 40) -> list
             item for item in files
             if item.get("link")
             and item.get("width", 0) >= 540
-            and item.get("height", 0) >= item.get("width", 0)
+            and item.get("height", 0) >= 540
         ]
-        candidates.sort(key=lambda item: (item.get("width", 0), item.get("height", 0)), reverse=True)
+        # Prefer portrait, then choose the highest usable resolution.
+        candidates.sort(
+            key=lambda item: (
+                item.get("height", 0) >= item.get("width", 0),
+                item.get("width", 0) * item.get("height", 0),
+            ),
+            reverse=True,
+        )
         if candidates:
             urls.append(candidates[0]["link"])
     return list(dict.fromkeys(urls))
