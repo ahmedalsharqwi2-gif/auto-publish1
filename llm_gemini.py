@@ -149,7 +149,7 @@ def gemini_chat(
                     "Gemini %s attempt %d/%d network error: %s",
                     model, attempt, attempts, exc,
                 )
-                time.sleep(3 * attempt)
+                time.sleep(min(30, 2 ** (attempt - 1) * 2))
                 continue
 
             status = response.status_code
@@ -167,7 +167,7 @@ def gemini_chat(
                     "Gemini %s attempt %d/%d: HTTP %d",
                     model, attempt, attempts, status,
                 )
-                time.sleep(10 * attempt)
+                time.sleep(min(60, 2 ** (attempt - 1) * 5))
                 continue
 
             if status == 400:
@@ -217,7 +217,7 @@ def gemini_chat(
                 "Gemini %s returned empty content (attempt %d/%d, finishReason=%s)",
                 model, attempt, attempts, finish or "n/a",
             )
-            time.sleep(2 * attempt)
+            time.sleep(min(30, 2 ** (attempt - 1)))
 
     raise RuntimeError(f"Gemini failed: {last_error}")
 
@@ -267,7 +267,7 @@ def llm_chat(
                         OPENROUTER_MODEL, attempt, OPENROUTER_RETRIES, error,
                     )
                     if response.status_code in (429, 500, 502, 503, 504):
-                        time.sleep(2 * attempt)
+                        time.sleep(min(30, 2 ** (attempt - 1)))
                         continue
                     break
                 content = ((response.json().get("choices") or [{}])[0]
@@ -283,7 +283,7 @@ def llm_chat(
                     OPENROUTER_MODEL, attempt, OPENROUTER_RETRIES, exc,
                 )
             if attempt < OPENROUTER_RETRIES:
-                time.sleep(2 * attempt)
+                time.sleep(min(30, 2 ** (attempt - 1)))
     else:
         errors.append("openrouter: API key is not set")
 

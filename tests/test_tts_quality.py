@@ -62,6 +62,10 @@ class NarrationTextQualityTests(unittest.TestCase):
         self.assertEqual(normalize_edge_pitch("7"), "+7Hz")
         self.assertEqual(normalize_edge_pitch("invalid"), "+0Hz")
 
+    def test_missing_tashkeel_is_warning_not_fatal(self):
+        cleaned = enforce_text_quality("هذه جملة عربية سليمة بدون تشكيل")
+        self.assertIn("بدون", cleaned)
+
     def test_special_character_report_does_not_crash(self):
         checker = ArabicTTSQualityChecker()
         score, issues, warnings = checker.check_text_quality("نص عربي @ $ % &")

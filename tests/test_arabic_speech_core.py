@@ -11,6 +11,10 @@ class ArabicSpeechCoreTests(unittest.TestCase):
         self.assertEqual(prepared.align_text, "القاهرة فيها علم")
         self.assertEqual(len(prepared.span_map), 3)
 
+    def test_missing_lexicon_is_nonfatal_and_normalized(self):
+        result = text_gate("هذه جملة عربية سليمة", lexicon_path="/tmp/does-not-exist.json")
+        self.assertEqual(result["spoken_text"], result["display_text"])
+
     def test_text_gate_rejects_non_arabic(self):
         with self.assertRaises(GateError):
             text_gate("plain English only", min_words=1)

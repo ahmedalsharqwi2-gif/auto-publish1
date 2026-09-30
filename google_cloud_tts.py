@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import logging
+import time
 from pathlib import Path
 from typing import Optional, List
 
@@ -123,13 +124,32 @@ class GoogleCloudTTS:
                 pitch=pitch,
             )
 
-            # Generate speech
+            # Generate speech with bounded exponential retry for rate limits and transient outages.
             log.info(f"Generating speech with voice {voice_id}, rate={speaking_rate}, pitch={pitch}")
-            response = self.client.synthesize_speech(
-                input=synthesis_input,
-                voice=voice,
-                audio_config=audio_config,
-            )
+            retries = max(1, int(os.getenv("GOOGLE_TTS_RETRIES", "3")))
+            response = None
+            for attempt in range(1, retries + 1):
+                try:
+                    response = self.client.synthesize_speech(
+                        input=synthesis_input,
+                        voice=voice,
+                        audio_config=audio_config,
+                    )
+                    break
+                except Exception as exc:
+                    code = getattr(exc, "code", lambda: None)()
+                    retryable = code in (408, 429, 500, 502, 503, 504) or any(
+                        marker in str(exc).lower()
+                        for marker in ("rate", "temporar", "timeout", "unavailable")
+                    )
+                    if not retryable or attempt >= retries:
+                        raise
+                    delay = min(30, 2 ** (attempt - 1) * 2)
+                    log.warning(
+                        "Google Cloud TTS transient failure (%s); retry %d/%d in %.1fs",
+                        exc, attempt, retries, delay,
+                    )
+                    time.sleep(delay)
 
             # Save audio
             output_path.parent.mkdir(parents=True, exist_ok=True)

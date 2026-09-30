@@ -198,7 +198,7 @@ def find_text_problems(text: str) -> tuple[list[str], list[str]]:
         marked = sum(1 for w in counted if any(_is_mark(c) for c in w))
         coverage = marked / len(counted)
         if coverage < MIN_TASHKEEL_COVERAGE_FATAL:
-            fatal.append(f"التشكيل ناقص جدًا ({coverage:.0%} من الكلمات مشكولة)")
+            warn.append(f"التشكيل ناقص جدًا ({coverage:.0%} من الكلمات مشكولة)؛ سيُستخدم النص المُطبّع")
         elif coverage < MIN_TASHKEEL_COVERAGE_WARN:
             warn.append(f"التشكيل ناقص ({coverage:.0%} من الكلمات مشكولة)")
     return fatal, warn
