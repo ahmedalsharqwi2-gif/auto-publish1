@@ -92,7 +92,7 @@ class ArabicTTSQualityChecker:
             warnings.append(f"كلمات مكررة كثيرًا: {', '.join(repeated[:3])}")
 
         # Check 5: Special characters
-        special_chars = re.findall(r'[^\u0621-\u064A\s\u064B-\u0652.!؟؛،]', text)
+        special_chars = re.findall(r'[^\u0621-\u064A\s\u064B-\u0652.!؟؛،0-9()\[\]«»:"\-]', text)
         if special_chars:
             unique_specials = sorted(set(special_chars))
             if len(unique_specials) > 3:
