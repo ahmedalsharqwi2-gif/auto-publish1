@@ -52,6 +52,14 @@ OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "google/gemini-2.5-flash")
 OPENROUTER_RETRIES = max(1, int(os.getenv("OPENROUTER_RETRIES", "2")))
 OPENROUTER_REFERER = os.getenv("OPENROUTER_REFERER", "https://github.com/")
 OPENROUTER_TITLE = os.getenv("OPENROUTER_TITLE", "Auto Publish Reels")
+FALLBACK_API_KEY = _clean_key(
+    os.getenv("LLM_FALLBACK_API_KEY") or os.getenv("GROQ_API_KEY")
+)
+FALLBACK_ENDPOINT = os.getenv(
+    "LLM_FALLBACK_ENDPOINT", "https://api.groq.com/openai/v1/chat/completions"
+)
+FALLBACK_MODEL = os.getenv("LLM_FALLBACK_MODEL", "llama-3.3-70b-versatile")
+FALLBACK_RETRIES = max(1, int(os.getenv("LLM_FALLBACK_RETRIES", "2")))
 
 
 def gemini_key_kind() -> str:
@@ -287,6 +295,17 @@ def llm_chat(
     else:
         errors.append("openrouter: API key is not set")
 
+    if FALLBACK_API_KEY:
+        try:
+            return fallback_llm_chat(
+                messages, max_tokens=max_tokens, temperature=temperature, timeout=timeout
+            )
+        except Exception as exc:
+            errors.append(f"fallback: {exc}")
+            log.warning("Fallback LLM unavailable: %s", exc)
+    else:
+        errors.append("fallback: API key is not set")
+
     raise RuntimeError("All LLM providers failed: " + "; ".join(errors)[-800:])
 
 
@@ -317,6 +336,65 @@ def _openrouter_chat_once(messages, max_tokens, temperature, timeout) -> str:
     return content
 
 
+def _fallback_chat_once(messages, max_tokens, temperature, timeout) -> str:
+    """Call a third-party OpenAI-compatible endpoint without exposing secrets."""
+    if not FALLBACK_API_KEY:
+        raise RuntimeError("LLM_FALLBACK_API_KEY/GROQ_API_KEY is not set")
+    response = requests.post(
+        FALLBACK_ENDPOINT,
+        headers={
+            "Authorization": f"Bearer {FALLBACK_API_KEY}",
+            "Content-Type": "application/json",
+        },
+        json={
+            "model": FALLBACK_MODEL,
+            "messages": messages,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+        },
+        timeout=timeout,
+    )
+    if response.status_code != 200:
+        error = RuntimeError(
+            f"Fallback LLM HTTP {response.status_code}: {response.text[:200]}"
+        )
+        error.status_code = response.status_code
+        error.response = response
+        raise error
+    content = (
+        ((response.json().get("choices") or [{}])[0].get("message") or {})
+        .get("content")
+        or ""
+    )
+    if not content.strip():
+        raise RuntimeError("Fallback LLM returned empty content")
+    log.info("Fallback LLM: using model %s", FALLBACK_MODEL)
+    return content
+
+
+def fallback_llm_chat(messages, max_tokens=4000, temperature=0.6, timeout=120) -> str:
+    """Bounded retry wrapper for the configurable third provider."""
+    last_error = "no attempts"
+    for attempt in range(1, FALLBACK_RETRIES + 1):
+        try:
+            return _fallback_chat_once(messages, max_tokens, temperature, timeout)
+        except Exception as exc:
+            last_error = str(exc)
+            status = getattr(exc, "status_code", None)
+            retryable = status in (408, 429, 500, 502, 503, 504) or any(
+                marker in last_error.lower()
+                for marker in ("timeout", "temporar", "rate limit", "overload")
+            )
+            log.warning(
+                "Fallback LLM attempt %d/%d failed (retryable=%s): %s",
+                attempt, FALLBACK_RETRIES, retryable, last_error[:240],
+            )
+            if not retryable or attempt >= FALLBACK_RETRIES:
+                break
+            time.sleep(min(30, 2 ** (attempt - 1) * 2))
+    raise RuntimeError(f"Fallback LLM failed: {last_error}")
+
+
 def pooled_llm_chat(messages, max_tokens=4000, temperature=0.6, timeout=120) -> str:
     """Provider-pool entry point: rate limit, circuit break, then fail over."""
     providers = []
@@ -336,6 +414,14 @@ def pooled_llm_chat(messages, max_tokens=4000, temperature=0.6, timeout=120) -> 
             max_attempts=max(1, int(os.getenv("OPENROUTER_POOL_ATTEMPTS", "2"))),
             rate_limit_per_second=float(os.getenv("OPENROUTER_RATE_LIMIT", "0.5")),
             burst=float(os.getenv("OPENROUTER_RATE_BURST", "1")),
+        ))
+    if FALLBACK_API_KEY:
+        providers.append(Provider(
+            "fallback",
+            lambda **_: _fallback_chat_once(messages, max_tokens, temperature, timeout),
+            max_attempts=FALLBACK_RETRIES,
+            rate_limit_per_second=float(os.getenv("FALLBACK_RATE_LIMIT", "0.5")),
+            burst=float(os.getenv("FALLBACK_RATE_BURST", "1")),
         ))
     if not providers:
         raise RuntimeError("No LLM provider credentials are configured")

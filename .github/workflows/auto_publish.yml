@@ -16,6 +16,14 @@ on:
         required: false
         default: false
         type: boolean
+      video_renderer:
+        description: 'Video renderer: native FFmpeg or optional MoneyPrinterTurbo'
+        required: false
+        default: 'ffmpeg'
+        type: choice
+        options:
+          - ffmpeg
+          - mpt
 
 concurrency:
   group: auto-publish-voice-rotation
@@ -42,6 +50,20 @@ jobs:
           echo "Cairo local time: $(date '+%Y-%m-%d %H:%M:%S %Z')"
 
       - uses: actions/checkout@v5
+
+      - name: Checkout MoneyPrinterTurbo renderer
+        if: ${{ inputs.video_renderer == 'mpt' }}
+        uses: actions/checkout@v5
+        with:
+          repository: harry0703/MoneyPrinterTurbo
+          path: third_party/MoneyPrinterTurbo
+          fetch-depth: 1
+
+      - name: Install uv for MoneyPrinterTurbo
+        if: ${{ inputs.video_renderer == 'mpt' }}
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: 'latest'
 
       - uses: actions/setup-python@v6
         with:
@@ -154,6 +176,13 @@ jobs:
           OPENROUTER_RATE_LIMIT: '0.5'
           OPENROUTER_RATE_BURST: '1'
           OPENROUTER_POOL_ATTEMPTS: '2'
+          # --- Third provider: any OpenAI-compatible endpoint (Groq by default) ---
+          LLM_FALLBACK_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          LLM_FALLBACK_ENDPOINT: ${{ vars.LLM_FALLBACK_ENDPOINT || 'https://api.groq.com/openai/v1/chat/completions' }}
+          LLM_FALLBACK_MODEL: ${{ vars.LLM_FALLBACK_MODEL || 'llama-3.3-70b-versatile' }}
+          LLM_FALLBACK_RETRIES: '2'
+          FALLBACK_RATE_LIMIT: '0.5'
+          FALLBACK_RATE_BURST: '1'
           LLM_POOL_BACKOFF_BASE: '2'
           LLM_POOL_BACKOFF_MAX: '30'
 
@@ -217,6 +246,9 @@ jobs:
           EDGE_TTS_RATE: '+5%'
           EDGE_TTS_PITCH: '-5Hz'
           MUSIC_VOLUME: '0.07'
+          VIDEO_RENDERER: ${{ inputs.video_renderer || 'ffmpeg' }}
+          MONEYPRINTERTURBO_ROOT: 'third_party/MoneyPrinterTurbo'
+          MPT_FALLBACK_TO_FFMPEG: 'false'
           DRY_RUN: 'false'
 
         run: |
