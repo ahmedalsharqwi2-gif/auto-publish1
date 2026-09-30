@@ -148,6 +148,42 @@ jobs:
         run: |
           python -m arabic_speech_core.cli preflight --text "هذه عينة عربية قصيرة للتحقق من اللغة والمزود قبل توليد المحتوى العلمي." --engine edge --locale ar-SA --voice "$EDGE_TTS_VOICE" --lexicon config/arabic_pronunciation.json --min-words 8 --max-words 40
 
+      - name: Resolve available fallback model
+        env:
+          FALLBACK_KEY: ${{ secrets.LLM_FALLBACK_API_KEY || secrets.GROQ_API_KEY }}
+          FALLBACK_ENDPOINT: ${{ vars.LLM_FALLBACK_ENDPOINT || 'https://api.groq.com/openai/v1/chat/completions' }}
+        run: |
+          if [ -z "$FALLBACK_KEY" ]; then
+            echo "No OpenAI-compatible fallback key; skipping model discovery."
+            exit 0
+          fi
+          MODELS_URL="${FALLBACK_ENDPOINT%/chat/completions}/models"
+          curl --fail --silent --show-error --max-time 20 \
+            -H "Authorization: Bearer $FALLBACK_KEY" "$MODELS_URL" > /tmp/fallback_models.json
+          SELECTED_MODEL="$(python - <<'PY'
+          import json
+          from pathlib import Path
+          preferred = (
+              "openai/gpt-oss-120b",
+              "openai/gpt-oss-20b",
+              "llama-3.3-70b-versatile",
+              "llama-3.1-8b-instant",
+              "moonshotai/kimi-k2-instruct",
+          )
+          data = json.loads(Path("/tmp/fallback_models.json").read_text())
+          ids = [str(item.get("id")) for item in data.get("data", []) if item.get("id")]
+          selected = next((name for name in preferred if name in ids), ids[0] if ids else "")
+          print(selected)
+          PY
+          )"
+          if [ -n "$SELECTED_MODEL" ]; then
+            echo "Resolved fallback model: $SELECTED_MODEL"
+            echo "LLM_FALLBACK_MODEL=$SELECTED_MODEL" >> "$GITHUB_ENV"
+          else
+            echo "ERROR: fallback endpoint returned no usable models"
+            exit 1
+          fi
+
       - name: Generate and publish
         env:
           # --- LLM provider: Gemini (primary) ---
@@ -161,7 +197,9 @@ jobs:
           # 105–150 Arabic words fit comfortably below this cap and the
           # smaller request avoids OpenRouter HTTP 402 when only limited
           # credits remain.
-          LLM_MAX_COMPLETION_TOKENS: '1200'
+          # 105–150 Arabic words need far less than this; keep the cap below
+          # the smallest observed OpenRouter credit budget to avoid HTTP 402.
+          LLM_MAX_COMPLETION_TOKENS: '800'
           LLM_TIMEOUT: '45'
 
           # --- LLM provider: OpenRouter (optional fallback only) ---
@@ -177,9 +215,7 @@ jobs:
           # --- Third provider: any OpenAI-compatible endpoint (Groq by default) ---
           LLM_FALLBACK_API_KEY: ${{ secrets.LLM_FALLBACK_API_KEY || secrets.GROQ_API_KEY }}
           LLM_FALLBACK_ENDPOINT: ${{ vars.LLM_FALLBACK_ENDPOINT || 'https://api.groq.com/openai/v1/chat/completions' }}
-          # Groq's stable general-purpose model; the previous gpt-oss name
-          # returned HTTP 404 and made every provider fail over uselessly.
-          LLM_FALLBACK_MODEL: 'llama-3.3-70b-versatile'
+          # Resolve this per-run from the provider's /models endpoint above.
           LLM_FALLBACK_REASONING_EFFORT: ''
           LLM_FALLBACK_RETRIES: '2'
           FALLBACK_RATE_LIMIT: '0.5'

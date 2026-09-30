@@ -61,7 +61,7 @@ FALLBACK_ENDPOINT = os.getenv(
 FALLBACK_MODEL = os.getenv("LLM_FALLBACK_MODEL", "llama-3.3-70b-versatile")
 FALLBACK_RETRIES = max(1, int(os.getenv("LLM_FALLBACK_RETRIES", "2")))
 FALLBACK_REASONING_EFFORT = os.getenv("LLM_FALLBACK_REASONING_EFFORT", "low").strip()
-DEFAULT_MAX_OUTPUT_TOKENS = max(256, int(os.getenv("LLM_MAX_COMPLETION_TOKENS", "1200")))
+DEFAULT_MAX_OUTPUT_TOKENS = max(256, int(os.getenv("LLM_MAX_COMPLETION_TOKENS", "800")))
 
 
 def _output_token_limit(value: int | None) -> int:
