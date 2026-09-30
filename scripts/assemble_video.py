@@ -89,7 +89,7 @@ def _filter_path(path: Path) -> str:
     return str(path.resolve()).replace("\\", "/").replace(":", r"\:").replace("'", r"\'")
 
 
-def _assemble_video_ffmpeg(audio_path: Path, narration: str, output_path: Path, topic: str = "") -> Path:
+def assemble_video(audio_path: Path, narration: str, output_path: Path, topic: str = "") -> Path:
     """Create a 9:16 MP4 with Pexels footage and Arabic captions."""
     duration = probe_duration(audio_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -119,20 +119,3 @@ def _assemble_video_ffmpeg(audio_path: Path, narration: str, output_path: Path, 
     ass_path.unlink(missing_ok=True)
     pexels_track.unlink(missing_ok=True)
     return output_path
-
-
-def assemble_video(audio_path: Path, narration: str, output_path: Path, topic: str = "") -> Path:
-    """Render with the selected engine; MPT is opt-in and never publishes."""
-    renderer = os.getenv("VIDEO_RENDERER", "ffmpeg").strip().lower()
-    if renderer not in {"ffmpeg", "mpt"}:
-        raise ValueError(f"Unsupported VIDEO_RENDERER: {renderer}")
-    if renderer == "ffmpeg":
-        return _assemble_video_ffmpeg(audio_path, narration, output_path, topic)
-    try:
-        from mpt_renderer import render_with_moneyprinterturbo
-
-        return render_with_moneyprinterturbo(audio_path, narration, output_path, topic)
-    except Exception:
-        if os.getenv("MPT_FALLBACK_TO_FFMPEG", "false").lower() != "true":
-            raise
-        return _assemble_video_ffmpeg(audio_path, narration, output_path, topic)
