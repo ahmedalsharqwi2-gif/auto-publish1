@@ -153,28 +153,45 @@ class ContentGenerator:
 النص:"""
 
         try:
-            response = llm_chat([{"role": "user", "content": prompt}])
-            narration = normalize_narration_response(response)
-            
-            # Fix grammar and quality
-            fixed_narration, grammar_fixes = self.grammar_fixer.fix_text(narration)
-            if grammar_fixes:
-                log.info(f"Applied {len(grammar_fixes)} grammar fixes")
-            
-            # Check quality
+            fixed_narration = ""
+            for attempt in range(2):
+                request = prompt
+                if attempt:
+                    request = (
+                        f"أعد كتابة النص كاملًا بين {self.min_words} و{self.max_words} كلمة بالضبط، "
+                        "ولا تختصره. حافظ على الخطاف والشرح والنتيجة المفاجئة.\n\n"
+                        f"النص السابق:\n{fixed_narration}"
+                    )
+                response = llm_chat([{"role": "user", "content": request}])
+                narration = normalize_narration_response(response)
+
+                fixed_narration, grammar_fixes = self.grammar_fixer.fix_text(narration)
+                if grammar_fixes:
+                    log.info(f"Applied {len(grammar_fixes)} grammar fixes")
+                word_count = len(fixed_narration.split())
+                log.info("Narration length: %d words (required %d–%d)", word_count, self.min_words, self.max_words)
+                if self.min_words <= word_count <= self.max_words:
+                    break
+                if attempt == 0:
+                    log.warning("Narration length outside range; requesting a full-length rewrite")
+            else:
+                raise ValueError(
+                    f"النص خارج النطاق بعد محاولتين: {len(fixed_narration.split())} كلمة، "
+                    f"المطلوب {self.min_words}-{self.max_words}"
+                )
+
             report = self.quality_checker.generate_report(fixed_narration)
             log.info(f"Content quality score: {report.overall_score:.2f}/1.0")
-            
             if report.issues:
                 log.warning(f"Quality issues found: {report.issues}")
-            
             if not report.is_acceptable:
                 log.warning("Content quality below acceptable threshold, attempting revision...")
-                # Request revision
-                revision_prompt = f"الرجاء إصلاح الأخطاء التالية في النص:\n{chr(10).join(report.issues)}\n\nالنص الأصلي:\n{fixed_narration}"
+                revision_prompt = f"الرجاء إصلاح الأخطاء التالية في النص مع الحفاظ على طوله بين {self.min_words} و{self.max_words} كلمة:\n{chr(10).join(report.issues)}\n\nالنص الأصلي:\n{fixed_narration}"
                 response = llm_chat([{"role": "user", "content": revision_prompt}])
                 fixed_narration = normalize_narration_response(response)
-            
+                revised_words = len(fixed_narration.split())
+                if not self.min_words <= revised_words <= self.max_words:
+                    raise ValueError(f"النص بعد المراجعة خارج النطاق: {revised_words} كلمة")
             return fixed_narration
             
         except Exception as e:

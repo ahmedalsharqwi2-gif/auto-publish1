@@ -26,7 +26,10 @@ from scripts import (
     QualityCheckPipeline,
     ContentPublisher,
 )
-from scripts.assemble_video import assemble_video
+from scripts.assemble_video import assemble_video, probe_duration
+
+MIN_AUDIO_SECONDS = float(os.getenv("MIN_AUDIO_SECONDS", "60"))
+MAX_AUDIO_SECONDS = float(os.getenv("MAX_AUDIO_SECONDS", "90"))
 
 
 class AutoPublishPipeline:
@@ -96,6 +99,15 @@ class AutoPublishPipeline:
                 log.error("Audio quality not acceptable for publishing")
                 return False
 
+            audio_duration = probe_duration(output_path)
+            log.info("✓ Audio duration: %.2fs (required %.0f–%.0fs)", audio_duration, MIN_AUDIO_SECONDS, MAX_AUDIO_SECONDS)
+            if not MIN_AUDIO_SECONDS <= audio_duration <= MAX_AUDIO_SECONDS:
+                log.error(
+                    "Audio duration outside publishing window: %.2fs; refusing to publish",
+                    audio_duration,
+                )
+                return False
+
             # Build the actual vertical MP4 before publishing. Previously the
             # pipeline sent narration.mp3 to Buffer, so there was no visual
             # layer or on-screen Arabic text at all.
@@ -121,10 +133,10 @@ class AutoPublishPipeline:
                 channel_ids=channels,
             )
 
-            if publish_success:
-                log.info(f"✓ Content published successfully")
-            else:
-                log.warning("Publishing completed with warnings")
+            if not publish_success:
+                log.error("Publishing was not confirmed for every configured channel")
+                return False
+            log.info("✓ Content published successfully to every configured channel")
 
             log.info("\n" + "="*60)
             log.info("Pipeline completed successfully!")
