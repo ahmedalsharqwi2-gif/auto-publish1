@@ -124,6 +124,13 @@ jobs:
           test -n "$GH_RELEASE_TOKEN" || { echo "ERROR: GitHub release token is missing"; exit 1; }
           echo "Publishing credentials and channel mapping are present."
 
+      - name: Arabic preflight gates (science)
+        env:
+          EDGE_TTS_VOICE: "ar-SA-HamedNeural"
+          TTS_ENGINE: "edge"
+        run: |
+          python -m arabic_speech_core.cli preflight --text "هذه عينة عربية قصيرة للتحقق من اللغة والمزود قبل توليد المحتوى العلمي." --engine edge --locale ar-SA --voice "$EDGE_TTS_VOICE" --lexicon config/arabic_pronunciation.json --min-words 8 --max-words 40
+
       - name: Generate and publish
         env:
           # --- LLM provider: Gemini (primary) ---
