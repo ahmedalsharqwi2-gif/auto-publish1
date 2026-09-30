@@ -31,7 +31,7 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     # Cold SILMA/Whisper setup plus TTS and FFmpeg can exceed one hour.
-    timeout-minutes: 120
+    timeout-minutes: 180
     steps:
       - name: Show scheduled trigger time
         env:
