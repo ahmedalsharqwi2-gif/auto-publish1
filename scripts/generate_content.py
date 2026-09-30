@@ -154,7 +154,7 @@ class ContentGenerator:
 
         try:
             fixed_narration = ""
-            for attempt in range(2):
+            for attempt in range(3):
                 request = prompt
                 if attempt:
                     request = (
@@ -176,7 +176,7 @@ class ContentGenerator:
                     log.warning("Narration length outside range; requesting a full-length rewrite")
             else:
                 raise ValueError(
-                    f"النص خارج النطاق بعد محاولتين: {len(fixed_narration.split())} كلمة، "
+                    f"النص خارج النطاق بعد ثلاث محاولات: {len(fixed_narration.split())} كلمة، "
                     f"المطلوب {self.min_words}-{self.max_words}"
                 )
 

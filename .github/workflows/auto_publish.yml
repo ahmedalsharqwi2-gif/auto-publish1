@@ -152,8 +152,10 @@ jobs:
           TARGET_AUDIO_SECONDS: '85'
           # main.py reads MIN_WORDS/MAX_WORDS; keep generated reels within
           # the 60–90 second target at SILMA's observed Arabic speaking rate.
-          MIN_WORDS: '115'
-          MAX_WORDS: '145'
+          # الحد الأدنى تقريبي فقط؛ الحكم النهائي هو مدة MP3 الفعلية 60–90 ثانية.
+          # 105 كلمة تكفي عادةً لأكثر من دقيقة مع SILMA بسرعة 1.08.
+          MIN_WORDS: '105'
+          MAX_WORDS: '150'
           PUBLISH_CHANNELS: 'youtube,tiktok,instagram'
           BUFFER_SCHEDULE_MODE: 'addToQueue'
           REQUIRE_EXTERNAL_SOURCES: 'false'
