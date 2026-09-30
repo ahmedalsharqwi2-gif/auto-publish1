@@ -1,7 +1,13 @@
 import unittest
 from unittest.mock import patch
 
-from scripts.generate_content import CHANNEL_BRIEF, TOPIC_CATEGORIES, ContentGenerator, normalize_topic_response
+from scripts.generate_content import (
+    CHANNEL_BRIEF,
+    TOPIC_CATEGORIES,
+    ContentGenerator,
+    normalize_narration_response,
+    normalize_topic_response,
+)
 
 
 class ContentGeneratorTopicPolicyTests(unittest.TestCase):
@@ -14,6 +20,10 @@ class ContentGeneratorTopicPolicyTests(unittest.TestCase):
             normalize_topic_response('{"title": "الثقوب السوداء"}'),
             "الثقوب السوداء",
         )
+
+    def test_normalize_narration_response_unwraps_escaped_json(self):
+        raw = r'{"narration":"نص عربي.\\nجملة ثانية."}'
+        self.assertEqual(normalize_narration_response(raw), "نص عربي.\nجملة ثانية.")
 
     def test_channel_brief_and_topic_bank_are_used(self):
         with patch(

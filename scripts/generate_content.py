@@ -70,6 +70,23 @@ def normalize_topic_response(response: str) -> str:
     return re.sub(r"[*_`\"«»]", "", text.splitlines()[0] if text else "").strip()
 
 
+def normalize_narration_response(response: str) -> str:
+    """Extract narration text and remove transport wrappers from model output."""
+    text = re.sub(r"```(?:json|markdown|text)?", "", response or "", flags=re.IGNORECASE)
+    text = text.replace("```", "").strip()
+    try:
+        payload = json.loads(text)
+        if isinstance(payload, dict):
+            text = str(payload.get("narration") or payload.get("script") or payload.get("text") or text)
+        elif isinstance(payload, str):
+            text = payload
+    except json.JSONDecodeError:
+        pass
+    text = text.replace("\\n", "\n").replace("\\t", " ").replace('\\"', '"')
+    text = re.sub(r"[*_`]", "", text)
+    return text.strip().strip('"«»')
+
+
 class ContentGenerator:
     """يولد المحتوى الأساسي (نص وموضوع)."""
 
@@ -125,7 +142,7 @@ class ContentGenerator:
 
         try:
             response = llm_chat([{"role": "user", "content": prompt}])
-            narration = response.strip()
+            narration = normalize_narration_response(response)
             
             # Fix grammar and quality
             fixed_narration, grammar_fixes = self.grammar_fixer.fix_text(narration)
@@ -144,7 +161,7 @@ class ContentGenerator:
                 # Request revision
                 revision_prompt = f"الرجاء إصلاح الأخطاء التالية في النص:\n{chr(10).join(report.issues)}\n\nالنص الأصلي:\n{fixed_narration}"
                 response = llm_chat([{"role": "user", "content": revision_prompt}])
-                fixed_narration = response.strip()
+                fixed_narration = normalize_narration_response(response)
             
             return fixed_narration
             
