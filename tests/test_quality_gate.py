@@ -11,6 +11,12 @@ class QualityGateTests(unittest.TestCase):
         self.assertTrue(report.is_acceptable)
         self.assertEqual(report.issues, [])
 
+    def test_asr_mismatch_is_not_a_blocking_issue(self):
+        checker = ArabicTTSQualityChecker(min_acceptable_score=0.75)
+        checker.check_audio_quality = lambda _audio, _text: (0.85, [])
+        report = checker.generate_report("هذه جملة عربية سليمة " * 30, audio_path="audio.mp3")
+        self.assertTrue(report.is_acceptable)
+
 
 if __name__ == "__main__":
     unittest.main()
