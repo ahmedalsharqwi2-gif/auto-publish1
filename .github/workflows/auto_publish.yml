@@ -72,9 +72,14 @@ jobs:
       - name: Check Gemini API key (fail fast)
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          LLM_FALLBACK_API_KEY: ${{ secrets.LLM_FALLBACK_API_KEY || secrets.GROQ_API_KEY }}
         run: |
           if [ -z "$GEMINI_API_KEY" ]; then
-            echo "ERROR: the GEMINI_API_KEY secret is missing or empty"
+            if [ -n "$LLM_FALLBACK_API_KEY" ]; then
+              echo "WARNING: GEMINI_API_KEY is missing; using the configured fallback provider."
+              exit 0
+            fi
+            echo "ERROR: GEMINI_API_KEY and fallback LLM secrets are missing or empty"
             exit 1
           fi
           KEY_CLEAN="$(printf '%s' "$GEMINI_API_KEY" | tr -d '[:space:]"'"'"'')"
@@ -90,7 +95,11 @@ jobs:
           if [ "$CODE" != "200" ]; then
             head -c 500 /tmp/gemini_check.json
             echo
-            echo "ERROR: Gemini rejected the key. Re-create the secret without spaces or quotes."
+            if [ -n "$LLM_FALLBACK_API_KEY" ]; then
+              echo "WARNING: Gemini preflight failed; continuing with the configured fallback provider."
+              exit 0
+            fi
+            echo "ERROR: Gemini rejected the key and no fallback provider is configured."
             exit 1
           fi
 
@@ -177,7 +186,7 @@ jobs:
           OPENROUTER_RATE_BURST: '1'
           OPENROUTER_POOL_ATTEMPTS: '2'
           # --- Third provider: any OpenAI-compatible endpoint (Groq by default) ---
-          LLM_FALLBACK_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          LLM_FALLBACK_API_KEY: ${{ secrets.LLM_FALLBACK_API_KEY || secrets.GROQ_API_KEY }}
           LLM_FALLBACK_ENDPOINT: ${{ vars.LLM_FALLBACK_ENDPOINT || 'https://api.groq.com/openai/v1/chat/completions' }}
           LLM_FALLBACK_MODEL: ${{ vars.LLM_FALLBACK_MODEL || 'llama-3.3-70b-versatile' }}
           LLM_FALLBACK_RETRIES: '2'
