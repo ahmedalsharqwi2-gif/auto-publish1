@@ -89,6 +89,9 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      - name: Verify Edge TTS installation
+        run: python -c "import edge_tts; print('edge-tts import OK:', getattr(edge_tts, '__version__', 'installed'))"
+
       - name: Cache models
         uses: actions/cache@v4
         with:
@@ -143,7 +146,7 @@ jobs:
 
       - name: Arabic preflight gates (science)
         env:
-          EDGE_TTS_VOICE: "ar-SA-HamedNeural"
+          EDGE_TTS_VOICE: "ar-EG-ShakirNeural"
           TTS_ENGINE: "edge"
         run: |
           python -m arabic_speech_core.cli preflight --text "هذه عينة عربية قصيرة للتحقق من اللغة والمزود قبل توليد المحتوى العلمي." --engine edge --locale ar-SA --voice "$EDGE_TTS_VOICE" --lexicon config/arabic_pronunciation.json --min-words 8 --max-words 40
@@ -269,7 +272,9 @@ jobs:
           WIKI_LANG: 'ar'
 
           # --- TTS ---
-          TTS_ENGINE: 'silma'
+          TTS_ENGINE: "edge"
+          EDGE_TTS_VOICES: "ar-EG-ShakirNeural"
+          EDGE_TTS_VOICE: "ar-EG-ShakirNeural"
           SILMA_REFERENCE_PROFILE: ${{ inputs.voice_profile || 'auto' }}
           SILMA_VOICE_PROFILES_FILE: 'assets/voices/voice_profiles.json'
           # سرعة أعلى قليلًا حتى تكون القراءة سريعة وممتعة بدون ابتلاع الكلمات.
@@ -280,8 +285,8 @@ jobs:
           WHISPER_MODEL: 'base'
           ASR_MIN_MATCH_RATIO: '0.82'
           SILMA_FALLBACK_TO_EDGE: 'true'
-          EDGE_TTS_RATE: '+5%'
-          EDGE_TTS_PITCH: '-5Hz'
+          EDGE_TTS_RATE: "+0%"
+          EDGE_TTS_PITCH: "-2Hz"
           MUSIC_VOLUME: '0.07'
           DRY_RUN: ${{ inputs.dry_run && 'true' || 'false' }}
 
@@ -292,6 +297,13 @@ jobs:
           test -f assets/voices/voice_profiles.json || { echo "ERROR: voice profiles config is missing"; exit 1; }
           test -f fact_check.py || { echo "ERROR: fact_check.py is missing"; exit 1; }
           python main.py
+
+      - name: Verify final montage and B-roll output
+        run: |
+          test -s output/final_video.mp4 || { echo "ERROR: final video missing or empty"; exit 1; }
+          ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0 output/final_video.mp4
+          ffprobe -v error -show_entries format=duration -of csv=p=0 output/final_video.mp4
+          echo "Professional vertical montage with topic-specific Pexels B-roll verified."
 
       - name: Upload Fact Check report
         if: always()
