@@ -26,6 +26,7 @@ from scripts import (
     QualityCheckPipeline,
     ContentPublisher,
 )
+from scripts.assemble_video import assemble_video
 
 
 class AutoPublishPipeline:
@@ -95,14 +96,25 @@ class AutoPublishPipeline:
                 log.error("Audio quality not acceptable for publishing")
                 return False
 
-            # Step 6: Publish
-            log.info("\n[Step 6] Publishing content...")
+            # Build the actual vertical MP4 before publishing. Previously the
+            # pipeline sent narration.mp3 to Buffer, so there was no visual
+            # layer or on-screen Arabic text at all.
+            log.info("\n[Step 6] Assembling vertical video with Arabic captions...")
+            video_path = assemble_video(
+                output_path,
+                checked_text,
+                Path("output/final_video.mp4"),
+            )
+            log.info(f"✓ Video assembled: {video_path}")
+
+            # Step 7: Publish
+            log.info("\n[Step 7] Publishing content...")
             title = topic[:60]
             description = f"{narration[:200]}...\n\n#المحتوى_المولد_آلياً #الذكاء_الاصطناعي"
             channels = os.getenv("PUBLISH_CHANNELS", "youtube,tiktok,instagram").split(",")
 
             publish_success = self.publisher.publish_to_buffer(
-                video_path=output_path,
+                video_path=video_path,
                 title=title,
                 description=description,
                 channel_ids=channels,
