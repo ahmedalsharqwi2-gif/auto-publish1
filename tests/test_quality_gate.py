@@ -17,6 +17,12 @@ class QualityGateTests(unittest.TestCase):
         report = checker.generate_report("هذه جملة عربية سليمة " * 30, audio_path="audio.mp3")
         self.assertTrue(report.is_acceptable)
 
+    def test_unicode_symbols_are_warnings_not_blockers(self):
+        text = "هذه جملة عربية سليمة عن سرعة الصوت ٣⁄٤ ودرجة ⁸." * 8
+        report = ArabicTTSQualityChecker(min_acceptable_score=0.75).generate_report(text)
+        self.assertTrue(report.is_acceptable)
+        self.assertEqual(report.issues, [])
+
 
 if __name__ == "__main__":
     unittest.main()

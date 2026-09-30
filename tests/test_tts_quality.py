@@ -70,8 +70,9 @@ class NarrationTextQualityTests(unittest.TestCase):
         checker = ArabicTTSQualityChecker()
         score, issues, warnings = checker.check_text_quality("نص عربي @ $ % &")
 
-        self.assertLess(score, 1.0)
-        self.assertTrue(any("رموز خاصة" in issue for issue in issues))
+        self.assertEqual(score, 1.0)
+        self.assertEqual(issues, [])
+        self.assertTrue(any("رموز خاصة" in warning for warning in warnings))
 
     def test_removes_lingering_latin_tokens_after_revision(self):
         script = "هَذَا نَصٌّ عَرَبِيٌّ جَيِّدٌ يَشْرَحُ الفِكْرَةَ A N O بِوُضُوحٍ."
