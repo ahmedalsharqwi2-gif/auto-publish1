@@ -98,18 +98,11 @@ def assemble_video(audio_path: Path, narration: str, output_path: Path, topic: s
     subtitles = _filter_path(ass_path)
     pexels_track = output_path.with_suffix(".pexels.mp4")
     has_pexels = build_pexels_track(os.getenv("PEXELS_API_KEY", "").strip(), topic, duration, pexels_track)
-    if has_pexels:
-        input_args = ["-i", str(pexels_track), "-i", str(audio_path)]
-        filter_complex = f"[0:v]subtitles='{subtitles}':fontsdir='/usr/share/fonts/truetype/dejavu'[v]"
-    else:
-        input_args = [
-            "-f", "lavfi", "-i", f"color=c=0x0b1220:s={VIDEO_WIDTH}x{VIDEO_HEIGHT}:r={FPS}:d={duration:.3f}",
-            "-i", str(audio_path),
-        ]
-        filter_complex = (
-            f"[1:a]showwaves=s=900x240:mode=cline:colors=0x38bdf8@0.9:rate={FPS},format=rgba[wave];"
-            f"[0:v][wave]overlay=90:220:format=auto,subtitles='{subtitles}':fontsdir='/usr/share/fonts/truetype/dejavu'[v]"
-        )
+    if not has_pexels:
+        ass_path.unlink(missing_ok=True)
+        raise RuntimeError("لم تتوفر مقاطع Pexels كافية ومرتبطة بالموضوع؛ أوقفنا النشر بدل استخدام موجة صوتية أو خلفية عشوائية.")
+    input_args = ["-i", str(pexels_track), "-i", str(audio_path)]
+    filter_complex = f"[0:v]subtitles='{subtitles}':fontsdir='/usr/share/fonts/truetype/dejavu'[v]"
     subprocess.run(
         [
             "ffmpeg", "-y",

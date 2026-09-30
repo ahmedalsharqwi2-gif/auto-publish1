@@ -128,6 +128,7 @@ jobs:
           OPENROUTER_TITLE: 'Auto Publish Reels'
 
           PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
+          PEXELS_REQUIRED: 'true'
           BUFFER_API_KEY: ${{ secrets.BUFFER_API_KEY }}
           BUFFER_CHANNEL_IDS: ${{ secrets.BUFFER_CHANNEL_IDS }}
           GH_RELEASE_TOKEN: ${{ secrets.GITHUB_TOKEN }}
