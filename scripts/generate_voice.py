@@ -27,6 +27,20 @@ log = logging.getLogger("pipeline")
 EDGE_FALLBACK_VOICE = os.getenv("EDGE_TTS_FALLBACK_VOICE", "ar-SA-HamedNeural")
 
 
+def normalize_edge_pitch(value: object) -> str:
+    """Return Edge TTS pitch syntax, which requires an explicit +/- sign."""
+    raw = str(value or "").strip()
+    if not raw:
+        return "+0Hz"
+    number = raw[:-2].strip() if raw.lower().endswith("hz") else raw
+    try:
+        amount = float(number)
+    except ValueError:
+        return "+0Hz"
+    sign = "+" if amount >= 0 else ""
+    return f"{sign}{amount:g}Hz"
+
+
 def edge_fallback_voice(voice: Optional[str]) -> str:
     """Return a valid Edge voice when a Google voice was used as input."""
     if voice and voice.startswith("ar-") and "Neural2" not in voice:
@@ -121,7 +135,7 @@ class VoiceGenerator:
         output_path: Path,
         voice: str = "ar-SA-AmmarNeural",
         rate: str = "+10%",
-        pitch: str = "0Hz",
+        pitch: Optional[str] = None,
     ) -> Tuple[bool, str]:
         """Generate speech using Edge TTS (fallback)."""
         if not self.edge_tts_available:
@@ -131,6 +145,10 @@ class VoiceGenerator:
         import asyncio
         
         log.info(f"Generating speech with Edge TTS (voice: {voice})")
+        safe_pitch = normalize_edge_pitch(
+            pitch if pitch is not None else os.getenv("EDGE_TTS_PITCH", "+0Hz")
+        )
+        log.info("Edge TTS pitch normalized to %s", safe_pitch)
         
         async def _generate():
             try:
@@ -138,7 +156,7 @@ class VoiceGenerator:
                     text=text,
                     voice=voice,
                     rate=rate,
-                    pitch=pitch,
+                    pitch=safe_pitch,
                 )
                 await communicate.save(str(output_path))
                 return True
