@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import math
 import os
+import time
 import subprocess
 from pathlib import Path
 from urllib.parse import urlparse
@@ -11,7 +12,7 @@ import requests
 
 PEXELS_SEARCH_URL = "https://api.pexels.com/videos/search"
 CLIP_SECONDS = 6.0
-MIN_CLIPS = 11
+MIN_CLIPS = 1
 MAX_CLIPS = 30
 
 
@@ -80,21 +81,34 @@ def search_portrait_videos(api_key: str, query: str, per_page: int = 80) -> list
 
 
 def _download(url: str, destination: Path) -> None:
+    """Download a clip atomically, retrying transient and truncated responses."""
     last_error: Exception | None = None
-    for attempt in range(1, 4):
+    temporary = destination.with_suffix(destination.suffix + ".part")
+    for attempt in range(1, 5):
         try:
-            destination.unlink(missing_ok=True)
+            temporary.unlink(missing_ok=True)
             with requests.get(url, stream=True, timeout=(20, 180)) as response:
                 response.raise_for_status()
-                with destination.open("wb") as output:
-                    for chunk in response.iter_content(chunk_size=1024 * 1024):
+                expected = response.headers.get("Content-Length")
+                written = 0
+                with temporary.open("wb") as output:
+                    for chunk in response.iter_content(chunk_size=256 * 1024):
                         if chunk:
                             output.write(chunk)
-            if destination.stat().st_size > 0:
+                            written += len(chunk)
+                if expected and written != int(expected):
+                    raise requests.RequestException(
+                        f"truncated download: received {written} of {expected} bytes"
+                    )
+            if temporary.stat().st_size > 0:
+                temporary.replace(destination)
                 return
         except (OSError, requests.RequestException) as exc:
             last_error = exc
-            print(f"⚠️ إعادة تنزيل مقطع Pexels {attempt}/3 بعد انقطاع الشبكة.")
+            temporary.unlink(missing_ok=True)
+            if attempt < 4:
+                time.sleep(2 ** (attempt - 1))
+            print(f"⚠️ إعادة تنزيل مقطع Pexels {attempt}/4 بعد انقطاع الشبكة.")
     if last_error:
         raise last_error
 
@@ -137,7 +151,10 @@ def build_pexels_track(api_key: str, topic: str, duration: float, output_path: P
 
         normalized: list[Path] = []
         remaining = duration
-        for index, url in enumerate(urls[:required]):
+        # Do not let one broken download consume a required slot. Continue through
+        # the extra candidates collected above and stop only after the full audio
+        # duration is covered by valid, unique clips.
+        for index, url in enumerate(urls):
             if remaining <= 0:
                 break
             suffix = Path(urlparse(url).path).suffix or ".mp4"
@@ -152,7 +169,7 @@ def build_pexels_track(api_key: str, topic: str, duration: float, output_path: P
             except (OSError, requests.RequestException, subprocess.CalledProcessError) as exc:
                 print(f"⚠️ تخطي مقطع Pexels غير صالح ({exc}).")
 
-        if len(normalized) < required or remaining > 0.05:
+        if remaining > 0.05:
             print(f"⚠️ تم تجهيز {len(normalized)} مقاطع فقط؛ لن نعيد أي مقطع لتغطية المدة.")
             return False
 

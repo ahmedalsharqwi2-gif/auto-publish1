@@ -14,6 +14,10 @@ class PexelsVideoTests(unittest.TestCase):
         self.assertGreater(required, 10)
         self.assertEqual(required, 15)
 
+    def test_short_video_does_not_require_unnecessary_minimum_clips(self):
+        required = max(MIN_CLIPS, int(50.4 / CLIP_SECONDS + 0.999))
+        self.assertEqual(required, 9)
+
 
 if __name__ == "__main__":
     unittest.main()
