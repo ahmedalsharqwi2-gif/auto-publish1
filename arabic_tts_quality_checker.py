@@ -99,7 +99,7 @@ class ArabicTTSQualityChecker:
         if special_chars:
             unique_specials = sorted(set(special_chars))
             if len(unique_specials) > 3:
-                issues.append(f"رموز خاصة غير عادية: {', '.join(unique_specials[:5])}")
+                issues.append(f"رموز خاصة غير عادية: {', '.join(sorted(unique_specials)[:5])}")
                 score *= 0.7
 
         # Check 6: Numbers
@@ -151,7 +151,10 @@ class ArabicTTSQualityChecker:
             duration_ratio = duration / expected_duration if expected_duration > 0 else 0
 
             if not (0.8 <= duration_ratio <= 1.3):
-                issues.append(f"مدة الصوت غير متوقعة: {duration:.1f}s (متوقع ~{expected_duration:.1f}s)")
+                # Speaking rate differs materially between SILMA, Edge and
+                # Google. The pipeline's explicit 60–90s duration gate is the
+                # authoritative publishing check; this is diagnostic only.
+                warnings.append(f"مدة الصوت مختلفة عن التقدير: {duration:.1f}s (متوقع تقريبيًا ~{expected_duration:.1f}s)")
                 score *= 0.8
 
             model = WhisperModel(

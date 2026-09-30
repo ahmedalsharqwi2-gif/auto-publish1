@@ -51,7 +51,7 @@ class GeminiTokenBudgetTests(unittest.TestCase):
         self.assertEqual(result, "fallback")
         self.assertEqual(post.call_args.kwargs["json"]["messages"][0]["content"], "test")
 
-    def test_requested_max_output_tokens_is_not_raised_by_default(self):
+    def test_default_output_tokens_use_deployment_budget(self):
         response = SimpleNamespace(
             status_code=200,
             text="",
@@ -70,14 +70,15 @@ class GeminiTokenBudgetTests(unittest.TestCase):
             patch.object(llm_gemini.requests, "post", return_value=response) as post,
         ):
             result = llm_gemini.gemini_chat(
-                [{"role": "user", "content": "test"}],
-                max_tokens=4000,
-                retries=1,
+                [{"role": "user", "content": "test"}], retries=1
             )
 
         self.assertEqual(result, '{"ok": true}')
         body = post.call_args.kwargs["json"]
-        self.assertEqual(body["generationConfig"]["maxOutputTokens"], 4000)
+        self.assertEqual(
+            body["generationConfig"]["maxOutputTokens"],
+            llm_gemini.DEFAULT_MAX_OUTPUT_TOKENS,
+        )
 
     def test_fallback_requests_low_reasoning_effort(self):
         response = SimpleNamespace(

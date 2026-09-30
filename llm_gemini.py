@@ -61,6 +61,12 @@ FALLBACK_ENDPOINT = os.getenv(
 FALLBACK_MODEL = os.getenv("LLM_FALLBACK_MODEL", "llama-3.3-70b-versatile")
 FALLBACK_RETRIES = max(1, int(os.getenv("LLM_FALLBACK_RETRIES", "2")))
 FALLBACK_REASONING_EFFORT = os.getenv("LLM_FALLBACK_REASONING_EFFORT", "low").strip()
+DEFAULT_MAX_OUTPUT_TOKENS = max(256, int(os.getenv("LLM_MAX_COMPLETION_TOKENS", "1200")))
+
+
+def _output_token_limit(value: int | None) -> int:
+    """Use the deployment budget unless a caller explicitly overrides it."""
+    return max(256, int(value if value is not None else DEFAULT_MAX_OUTPUT_TOKENS))
 
 
 def gemini_key_kind() -> str:
@@ -110,12 +116,13 @@ def _extract_text(data: dict[str, Any]) -> tuple[str, str]:
 
 def gemini_chat(
     messages: list[dict[str, str]],
-    max_tokens: int = 4000,
+    max_tokens: int | None = None,
     temperature: float = 0.6,
     timeout: int = 120,
     retries: int | None = None,
 ) -> str:
     """Send chat messages to Gemini and return the JSON-mode text reply."""
+    max_tokens = _output_token_limit(max_tokens)
     if not GEMINI_API_KEY:
         raise RuntimeError("GEMINI_API_KEY is not set")
 
@@ -233,11 +240,12 @@ def gemini_chat(
 
 def llm_chat(
     messages: list[dict[str, str]],
-    max_tokens: int = 4000,
+    max_tokens: int | None = None,
     temperature: float = 0.6,
     timeout: int = 120,
 ) -> str:
     """Call Gemini, then OpenRouter when Gemini is unavailable."""
+    max_tokens = _output_token_limit(max_tokens)
     errors: list[str] = []
     if GEMINI_API_KEY:
         try:
@@ -374,8 +382,9 @@ def _fallback_chat_once(messages, max_tokens, temperature, timeout) -> str:
     return content
 
 
-def fallback_llm_chat(messages, max_tokens=4000, temperature=0.6, timeout=120) -> str:
+def fallback_llm_chat(messages, max_tokens=None, temperature=0.6, timeout=120) -> str:
     """Bounded retry wrapper for the configurable third provider."""
+    max_tokens = _output_token_limit(max_tokens)
     last_error = "no attempts"
     for attempt in range(1, FALLBACK_RETRIES + 1):
         try:
@@ -397,8 +406,9 @@ def fallback_llm_chat(messages, max_tokens=4000, temperature=0.6, timeout=120) -
     raise RuntimeError(f"Fallback LLM failed: {last_error}")
 
 
-def pooled_llm_chat(messages, max_tokens=4000, temperature=0.6, timeout=120) -> str:
+def pooled_llm_chat(messages, max_tokens=None, temperature=0.6, timeout=120) -> str:
     """Provider-pool entry point: rate limit, circuit break, then fail over."""
+    max_tokens = _output_token_limit(max_tokens)
     providers = []
     if GEMINI_API_KEY:
         providers.append(Provider(

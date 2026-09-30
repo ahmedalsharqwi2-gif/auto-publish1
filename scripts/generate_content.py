@@ -92,6 +92,10 @@ def normalize_narration_response(response: str) -> str:
         else:
             text = re.sub(r'^\s*(?:نص السرد|النص|NARRATION|narration)\s*:\s*', '', text, flags=re.IGNORECASE)
     text = text.replace("\\n", "\n").replace("\\t", " ").replace('\\"', '"')
+    # Models occasionally emit bidi/control marks or decorative Unicode that
+    # is harmless visually but makes the strict Arabic quality gate fail.
+    text = re.sub(r"[\u200b-\u200f\u202a-\u202e\ufeff]", "", text)
+    text = re.sub(r"[^\u0621-\u064A\u0671-\u06FF\s.!؟؛،0-9()\[\]«»:\"'\-A-Za-z]", " ", text)
     text = re.sub(r"[*_`]", "", text)
     return text.strip().strip('"«»')
 
@@ -166,7 +170,10 @@ class ContentGenerator:
                         "لا تختصره ولا تُرجع ملاحظات خارج النص.\n\n"
                         f"النص السابق:\n{fixed_narration}"
                     )
-                response = llm_chat([{"role": "user", "content": request}])
+                response = llm_chat(
+                    [{"role": "user", "content": request}],
+                    max_tokens=int(os.getenv("LLM_MAX_COMPLETION_TOKENS", "1200")),
+                )
                 narration = normalize_narration_response(response)
 
                 fixed_narration, grammar_fixes = self.grammar_fixer.fix_text(narration)
@@ -191,7 +198,10 @@ class ContentGenerator:
             if not report.is_acceptable:
                 log.warning("Content quality below acceptable threshold, attempting revision...")
                 revision_prompt = f"الرجاء إصلاح الأخطاء التالية في النص مع الحفاظ على طوله بين {self.min_words} و{self.max_words} كلمة:\n{chr(10).join(report.issues)}\n\nالنص الأصلي:\n{fixed_narration}"
-                response = llm_chat([{"role": "user", "content": revision_prompt}])
+                response = llm_chat(
+                    [{"role": "user", "content": revision_prompt}],
+                    max_tokens=int(os.getenv("LLM_MAX_COMPLETION_TOKENS", "1200")),
+                )
                 fixed_narration = normalize_narration_response(response)
                 revised_words = len(fixed_narration.split())
                 if not self.min_words <= revised_words <= self.max_words:

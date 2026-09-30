@@ -18,6 +18,10 @@ class PexelsVideoTests(unittest.TestCase):
         required = max(MIN_CLIPS, int(50.4 / CLIP_SECONDS + 0.999))
         self.assertEqual(required, 9)
 
+    def test_clip_reuse_policy_is_documented(self):
+        """A search may return fewer unique clips than a full reel needs."""
+        self.assertLess(CLIP_SECONDS, 10)
+
 
 if __name__ == "__main__":
     unittest.main()

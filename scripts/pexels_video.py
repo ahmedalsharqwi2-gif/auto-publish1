@@ -127,7 +127,13 @@ def _normalize_clip(source: Path, destination: Path, duration: float) -> None:
 
 
 def build_pexels_track(api_key: str, topic: str, duration: float, output_path: Path) -> bool:
-    """Build a full-length track from unique, topic-specific clips only."""
+    """Build a full-length track from relevant clips.
+
+    Pexels search results are not deterministic and often contain fewer unique
+    usable clips than a 60–90 second reel needs. Reusing a validated relevant
+    clip is safer than failing a complete production or publishing a random
+    background.
+    """
     if not api_key:
         return False
     workdir = output_path.parent / "pexels_clips"
@@ -146,36 +152,37 @@ def build_pexels_track(api_key: str, topic: str, duration: float, output_path: P
             if len(urls) >= min(MAX_CLIPS, required + 5):
                 break
         if len(urls) < required:
-            print(f"⚠️ Pexels أعاد {len(urls)} مقاطع فقط، والمطلوب {required} مقطعًا؛ لن نكرر مقطعًا.")
-            return False
+            print(f"⚠️ Pexels أعاد {len(urls)} مقاطع فقط مقابل {required}؛ سيُعاد استخدام المقاطع السليمة عند الحاجة.")
 
         normalized: list[Path] = []
-        remaining = duration
-        # Do not let one broken download consume a required slot. Continue through
-        # the extra candidates collected above and stop only after the full audio
-        # duration is covered by valid, unique clips.
+        # Do not let one broken download consume a required slot. Download each
+        # candidate once, then repeat only validated relevant clips if needed.
         for index, url in enumerate(urls):
-            if remaining <= 0:
-                break
             suffix = Path(urlparse(url).path).suffix or ".mp4"
             raw = workdir / f"raw_{index}{suffix}"
             clip = workdir / f"clip_{index}.mp4"
             try:
                 _download(url, raw)
-                segment_duration = min(CLIP_SECONDS, remaining)
-                _normalize_clip(raw, clip, segment_duration)
+                _normalize_clip(raw, clip, CLIP_SECONDS)
                 normalized.append(clip)
-                remaining -= segment_duration
             except (OSError, requests.RequestException, subprocess.CalledProcessError) as exc:
                 print(f"⚠️ تخطي مقطع Pexels غير صالح ({exc}).")
 
-        if remaining > 0.05:
-            print(f"⚠️ تم تجهيز {len(normalized)} مقاطع فقط؛ لن نعيد أي مقطع لتغطية المدة.")
+        if not normalized:
+            print("⚠️ لم يتم تجهيز أي مقطع Pexels صالح.")
             return False
+
+        track_clips: list[Path] = []
+        remaining = duration
+        index = 0
+        while remaining > 0.05:
+            track_clips.append(normalized[index % len(normalized)])
+            remaining -= min(CLIP_SECONDS, remaining)
+            index += 1
 
         concat_list = workdir / "concat.txt"
         concat_list.write_text(
-            "\n".join(f"file '{path.resolve()}'" for path in normalized) + "\n",
+            "\n".join(f"file '{path.resolve()}'" for path in track_clips) + "\n",
             encoding="utf-8",
         )
         subprocess.run(
