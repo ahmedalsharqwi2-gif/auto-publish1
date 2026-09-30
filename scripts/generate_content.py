@@ -172,7 +172,7 @@ class ContentGenerator:
                     )
                 response = llm_chat(
                     [{"role": "user", "content": request}],
-                    max_tokens=int(os.getenv("LLM_MAX_COMPLETION_TOKENS", "800")),
+                    max_tokens=int(os.getenv("LLM_MAX_COMPLETION_TOKENS", "512")),
                 )
                 narration = normalize_narration_response(response)
 
@@ -200,7 +200,7 @@ class ContentGenerator:
                 revision_prompt = f"الرجاء إصلاح الأخطاء التالية في النص مع الحفاظ على طوله بين {self.min_words} و{self.max_words} كلمة:\n{chr(10).join(report.issues)}\n\nالنص الأصلي:\n{fixed_narration}"
                 response = llm_chat(
                     [{"role": "user", "content": revision_prompt}],
-                    max_tokens=int(os.getenv("LLM_MAX_COMPLETION_TOKENS", "800")),
+                    max_tokens=int(os.getenv("LLM_MAX_COMPLETION_TOKENS", "512")),
                 )
                 fixed_narration = normalize_narration_response(response)
                 revised_words = len(fixed_narration.split())

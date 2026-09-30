@@ -61,12 +61,21 @@ FALLBACK_ENDPOINT = os.getenv(
 FALLBACK_MODEL = os.getenv("LLM_FALLBACK_MODEL", "llama-3.3-70b-versatile")
 FALLBACK_RETRIES = max(1, int(os.getenv("LLM_FALLBACK_RETRIES", "2")))
 FALLBACK_REASONING_EFFORT = os.getenv("LLM_FALLBACK_REASONING_EFFORT", "low").strip()
-DEFAULT_MAX_OUTPUT_TOKENS = max(256, int(os.getenv("LLM_MAX_COMPLETION_TOKENS", "800")))
+DEFAULT_MAX_OUTPUT_TOKENS = max(256, int(os.getenv("LLM_MAX_COMPLETION_TOKENS", "512")))
 
 
 def _output_token_limit(value: int | None) -> int:
     """Use the deployment budget unless a caller explicitly overrides it."""
     return max(256, int(value if value is not None else DEFAULT_MAX_OUTPUT_TOKENS))
+
+
+def _fallback_reasoning_effort() -> str:
+    """Prevent reasoning models from spending the whole output on thoughts."""
+    if FALLBACK_REASONING_EFFORT:
+        return FALLBACK_REASONING_EFFORT
+    if FALLBACK_MODEL.startswith("openai/gpt-oss"):
+        return "low"
+    return ""
 
 
 def gemini_key_kind() -> str:
@@ -360,7 +369,7 @@ def _fallback_chat_once(messages, max_tokens, temperature, timeout) -> str:
             "messages": messages,
             "max_tokens": max_tokens,
             "temperature": temperature,
-            **({"reasoning_effort": FALLBACK_REASONING_EFFORT} if FALLBACK_REASONING_EFFORT else {}),
+            **({"reasoning_effort": _fallback_reasoning_effort()} if _fallback_reasoning_effort() else {}),
         },
         timeout=timeout,
     )

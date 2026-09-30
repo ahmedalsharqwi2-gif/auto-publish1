@@ -197,9 +197,9 @@ jobs:
           # 105–150 Arabic words fit comfortably below this cap and the
           # smaller request avoids OpenRouter HTTP 402 when only limited
           # credits remain.
-          # 105–150 Arabic words need far less than this; keep the cap below
-          # the smallest observed OpenRouter credit budget to avoid HTTP 402.
-          LLM_MAX_COMPLETION_TOKENS: '800'
+          # 105–150 Arabic words fit below this; the conservative cap also
+          # survives the account's fluctuating OpenRouter credit budget.
+          LLM_MAX_COMPLETION_TOKENS: '512'
           LLM_TIMEOUT: '45'
 
           # --- LLM provider: OpenRouter (optional fallback only) ---
@@ -216,7 +216,7 @@ jobs:
           LLM_FALLBACK_API_KEY: ${{ secrets.LLM_FALLBACK_API_KEY || secrets.GROQ_API_KEY }}
           LLM_FALLBACK_ENDPOINT: ${{ vars.LLM_FALLBACK_ENDPOINT || 'https://api.groq.com/openai/v1/chat/completions' }}
           # Resolve this per-run from the provider's /models endpoint above.
-          LLM_FALLBACK_REASONING_EFFORT: ''
+          LLM_FALLBACK_REASONING_EFFORT: 'low'
           LLM_FALLBACK_RETRIES: '2'
           FALLBACK_RATE_LIMIT: '0.5'
           FALLBACK_RATE_BURST: '1'
