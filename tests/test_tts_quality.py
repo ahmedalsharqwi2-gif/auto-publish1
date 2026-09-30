@@ -36,7 +36,7 @@ class NarrationTextQualityTests(unittest.TestCase):
             "scipy.io.wavfile": fake_wavfile,
         }), patch.object(Path, "exists", return_value=True):
             score, issues = checker.check_audio_quality(
-                Path("sample.mp3"), " ".join(["كلمة"] * 375)
+                Path("sample.mp3"), " ".join(["كلمة"] * 288)
             )
         self.assertEqual(score, 1.0)
         self.assertEqual(issues, [])

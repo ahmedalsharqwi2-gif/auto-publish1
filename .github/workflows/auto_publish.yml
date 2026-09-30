@@ -138,8 +138,10 @@ jobs:
           MIN_AUDIO_SECONDS: '60'
           MAX_AUDIO_SECONDS: '90'
           TARGET_AUDIO_SECONDS: '85'
-          MIN_SCRIPT_WORDS: '90'
-          MAX_SCRIPT_WORDS: '165'
+          # main.py reads MIN_WORDS/MAX_WORDS; keep generated reels within
+          # the 60–90 second target at SILMA's observed Arabic speaking rate.
+          MIN_WORDS: '90'
+          MAX_WORDS: '125'
           REQUIRE_EXTERNAL_SOURCES: 'false'
           EDITORIAL_REVIEW_ENABLED: 'true'
           MIN_TASHKEEL_COVERAGE_WARN: '0.85'

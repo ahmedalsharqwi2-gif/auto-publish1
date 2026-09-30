@@ -11,6 +11,7 @@ import re
 import logging
 import subprocess
 import json
+import os
 from pathlib import Path
 from dataclasses import dataclass
 from typing import List, Optional, Dict
@@ -140,7 +141,8 @@ class ArabicTTSQualityChecker:
                 duration = float(probe.stdout.strip())
 
             expected_words = len(expected_text.split())
-            expected_duration = expected_words / 2.5  # Average 2.5 words per second in Arabic
+            expected_wps = float(os.getenv("EXPECTED_ARABIC_WORDS_PER_SECOND", "1.6"))
+            expected_duration = expected_words / expected_wps
             duration_ratio = duration / expected_duration if expected_duration > 0 else 0
 
             if not (0.8 <= duration_ratio <= 1.3):
