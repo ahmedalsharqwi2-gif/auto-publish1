@@ -180,6 +180,14 @@ class ContentGenerator:
                 if grammar_fixes:
                     log.info(f"Applied {len(grammar_fixes)} grammar fixes")
                 word_count = len(fixed_narration.split())
+                # Providers commonly overshoot a requested word window by one
+                # or two tokens. Trim only this harmless boundary noise; keep
+                # large deviations on the retry path so short/long scripts do
+                # not silently pass production gates.
+                if self.max_words < word_count <= self.max_words + 3:
+                    fixed_narration = " ".join(fixed_narration.split()[:self.max_words]).rstrip("،؛:") + "。"
+                    word_count = len(fixed_narration.split())
+                    log.info("Trimmed minor narration overshoot to %d words", word_count)
                 log.info("Narration length: %d words (required %d–%d)", word_count, self.min_words, self.max_words)
                 if self.min_words <= word_count <= self.max_words:
                     break
