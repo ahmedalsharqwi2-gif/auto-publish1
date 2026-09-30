@@ -17,6 +17,8 @@ from typing import Any
 
 import requests
 
+from provider_pool import Provider, ProviderPool
+
 log = logging.getLogger("llm_gemini")
 
 
@@ -286,3 +288,59 @@ def llm_chat(
         errors.append("openrouter: API key is not set")
 
     raise RuntimeError("All LLM providers failed: " + "; ".join(errors)[-800:])
+
+
+def _openrouter_chat_once(messages, max_tokens, temperature, timeout) -> str:
+    """One OpenRouter attempt; ProviderPool owns retries and failover."""
+    if not OPENROUTER_API_KEY:
+        raise RuntimeError("OPENROUTER_API_KEY is not set")
+    response = requests.post(
+        OPENROUTER_ENDPOINT,
+        headers={
+            "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": OPENROUTER_REFERER,
+            "X-Title": OPENROUTER_TITLE,
+        },
+        json={"model": OPENROUTER_MODEL, "messages": messages,
+              "max_tokens": max_tokens, "temperature": temperature},
+        timeout=timeout,
+    )
+    if response.status_code != 200:
+        error = RuntimeError(f"OpenRouter HTTP {response.status_code}: {response.text[:200]}")
+        error.status_code = response.status_code
+        error.response = response
+        raise error
+    content = ((response.json().get("choices") or [{}])[0].get("message") or {}).get("content") or ""
+    if not content.strip():
+        raise RuntimeError("OpenRouter returned empty content")
+    return content
+
+
+def pooled_llm_chat(messages, max_tokens=4000, temperature=0.6, timeout=120) -> str:
+    """Provider-pool entry point: rate limit, circuit break, then fail over."""
+    providers = []
+    if GEMINI_API_KEY:
+        providers.append(Provider(
+            "gemini",
+            lambda **_: gemini_chat(messages, max_tokens=max_tokens,
+                                    temperature=temperature, timeout=timeout, retries=1),
+            max_attempts=1,
+            rate_limit_per_second=float(os.getenv("GEMINI_RATE_LIMIT", "0.2")),
+            burst=float(os.getenv("GEMINI_RATE_BURST", "1")),
+        ))
+    if OPENROUTER_API_KEY:
+        providers.append(Provider(
+            "openrouter",
+            lambda **_: _openrouter_chat_once(messages, max_tokens, temperature, timeout),
+            max_attempts=max(1, int(os.getenv("OPENROUTER_POOL_ATTEMPTS", "2"))),
+            rate_limit_per_second=float(os.getenv("OPENROUTER_RATE_LIMIT", "0.5")),
+            burst=float(os.getenv("OPENROUTER_RATE_BURST", "1")),
+        ))
+    if not providers:
+        raise RuntimeError("No LLM provider credentials are configured")
+    return ProviderPool(
+        providers,
+        backoff_base=float(os.getenv("LLM_POOL_BACKOFF_BASE", "2")),
+        backoff_max=float(os.getenv("LLM_POOL_BACKOFF_MAX", "30")),
+    ).call()

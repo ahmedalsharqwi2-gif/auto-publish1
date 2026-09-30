@@ -13,7 +13,7 @@ import logging
 from pathlib import Path
 from typing import Optional
 
-from llm_gemini import llm_chat
+from llm_gemini import pooled_llm_chat as llm_chat
 from arabic_grammar_fixer import ArabicGrammarFixer
 from arabic_tts_quality_checker import ArabicTTSQualityChecker
 

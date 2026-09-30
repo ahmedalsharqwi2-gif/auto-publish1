@@ -137,6 +137,13 @@ jobs:
           OPENROUTER_MODEL: 'google/gemini-2.5-flash'
           OPENROUTER_MAX_ATTEMPTS: '3'
           OPENROUTER_TITLE: 'Auto Publish Reels'
+          GEMINI_RATE_LIMIT: '0.2'
+          GEMINI_RATE_BURST: '1'
+          OPENROUTER_RATE_LIMIT: '0.5'
+          OPENROUTER_RATE_BURST: '1'
+          OPENROUTER_POOL_ATTEMPTS: '2'
+          LLM_POOL_BACKOFF_BASE: '2'
+          LLM_POOL_BACKOFF_MAX: '30'
 
           PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
           PEXELS_REQUIRED: 'true'
