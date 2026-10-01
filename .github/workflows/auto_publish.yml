@@ -265,14 +265,12 @@ jobs:
           MIN_AUDIO_SECONDS: '55'
           MAX_AUDIO_SECONDS: '90'
           TARGET_AUDIO_SECONDS: '85'
-          # main.py reads MIN_WORDS/MAX_WORDS; keep generated reels within
-          # the 60–90 second target at SILMA's observed Arabic speaking rate.
-          # الحد الأدنى تقريبي فقط؛ الحكم النهائي هو مدة MP3 الفعلية 60–90 ثانية.
-          # 105 كلمة تكفي عادةً لأكثر من دقيقة مع SILMA بسرعة 1.08.
-          # Edge speaks faster than SILMA; this larger window keeps the
-          # generated narration inside the required 60–90 second duration.
-          MIN_WORDS: '165'
-          MAX_WORDS: '190'
+          # main.py reads MIN_WORDS/MAX_WORDS; the final MP3 duration is the
+          # authoritative gate. Edge Arabic at the configured -15% rate can
+          # make 190 words exceed 90 seconds (observed: 101.98s), so keep the
+          # generated narration within a safer 130–165 word window.
+          MIN_WORDS: '130'
+          MAX_WORDS: '165'
           # BUFFER_CHANNEL_IDS is stored positionally as TikTok, YouTube,
           # Facebook in this repository's secret.
           PUBLISH_CHANNELS: 'tiktok,youtube,facebook'
