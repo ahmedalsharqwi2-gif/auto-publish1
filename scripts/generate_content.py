@@ -195,10 +195,15 @@ class ContentGenerator:
                 if attempt == 0:
                     log.warning("Narration length outside range; requesting a full-length rewrite")
             else:
-                raise ValueError(
-                    f"النص خارج النطاق بعد ثلاث محاولات: {len(fixed_narration.split())} كلمة، "
-                    f"المطلوب {self.min_words}-{self.max_words}"
-                )
+                final_count = len(fixed_narration.split())
+                if final_count > self.max_words:
+                    fixed_narration = " ".join(fixed_narration.split()[:self.max_words]).rstrip("،؛:") + "。"
+                    log.warning("Trimmed final narration from %d to %d words; audio speed is never altered", final_count, self.max_words)
+                else:
+                    raise ValueError(
+                        f"النص خارج النطاق بعد ثلاث محاولات: {final_count} كلمة، "
+                        f"المطلوب {self.min_words}-{self.max_words}"
+                    )
 
             report = self.quality_checker.generate_report(fixed_narration)
             log.info(f"Content quality score: {report.overall_score:.2f}/1.0")

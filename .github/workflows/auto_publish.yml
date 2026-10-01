@@ -245,7 +245,7 @@ jobs:
           # Edge speaks faster than SILMA; this larger window keeps the
           # generated narration inside the required 60–90 second duration.
           MIN_WORDS: '165'
-          MAX_WORDS: '230'
+          MAX_WORDS: '190'
           # BUFFER_CHANNEL_IDS is stored positionally as TikTok, YouTube,
           # Facebook in this repository's secret.
           PUBLISH_CHANNELS: 'tiktok,youtube,facebook'
