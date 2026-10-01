@@ -14,6 +14,9 @@ VIDEO_HEIGHT = 1920
 FPS = 30
 WORDS_PER_CAPTION_CHUNK = 4
 FONT_SIZE = 58
+SFX_DIR = Path(__file__).resolve().parent.parent / "assets" / "sfx"
+SCIENCE_AMBIENCE_GAIN = 0.055
+SCIENCE_EVENT_GAIN = 0.18
 ARABIC_DIACRITICS = re.compile(r"[\u0610-\u061A\u064B-\u065F\u0670\u06D6-\u06ED\u08D3-\u08FF]")
 PUNCTUATION = str.maketrans(".,،؛:!?؟…-—_()[]{}\"«»/\\", " " * 23)
 
@@ -144,6 +147,36 @@ def _filter_path(path: Path) -> str:
     return str(path.resolve()).replace("\\", "/").replace(":", r"\:").replace("'", r"\'")
 
 
+def _mix_science_audio(voice_path: Path, duration: float, output_path: Path) -> Path:
+    """Mix quiet scientific ambience and timed transition events under narration."""
+    ambience = SFX_DIR / "science_lab_ambience_loop.mp3"
+    sting = SFX_DIR / "science_discovery_sting.mp3"
+    whoosh = SFX_DIR / "science_transition_whoosh.mp3"
+    required = [ambience, sting, whoosh]
+    missing = [str(p) for p in required if not p.is_file()]
+    if missing:
+        raise FileNotFoundError("Science SFX missing: " + ", ".join(missing))
+    points = [0.20, max(0.35, duration * 0.34), max(0.50, duration * 0.67)]
+    inputs = ["-i", str(voice_path), "-stream_loop", "-1", "-i", str(ambience)]
+    for _ in points:
+        inputs += ["-i", str(whoosh)]
+    inputs += ["-i", str(sting)]
+    filters = [f"[0:a]aresample=48000,volume=1.0[voice]",
+               f"[1:a]aresample=48000,volume={SCIENCE_AMBIENCE_GAIN},atrim=duration={duration:.3f}[amb]"]
+    event_labels = []
+    for idx, point in enumerate(points):
+        label = f"w{idx}"
+        input_idx = 2 + idx
+        filters.append(f"[{input_idx}:a]aresample=48000,volume={SCIENCE_EVENT_GAIN},adelay={int(point*1000)}|{int(point*1000)},atrim=duration={duration:.3f}[{label}]")
+        event_labels.append(f"[{label}]")
+    sting_idx = 2 + len(points)
+    filters.append(f"[{sting_idx}:a]aresample=48000,volume={SCIENCE_EVENT_GAIN},adelay=180|180,atrim=duration={duration:.3f}[sting]")
+    mix_inputs = "[voice][amb]" + "".join(event_labels) + "[sting]"
+    filters.append(f"{mix_inputs}amix=inputs={2+len(points)+1}:duration=first:dropout_transition=0:normalize=0,alimiter=limit=0.95:level=disabled[a]")
+    subprocess.run(["ffmpeg", "-y", *inputs, "-filter_complex", ";".join(filters), "-map", "[a]", "-t", f"{duration:.3f}", "-c:a", "libmp3lame", "-b:a", "192k", str(output_path)], check=True)
+    return output_path
+
+
 def assemble_video(audio_path: Path, narration: str, output_path: Path, topic: str = "") -> Path:
     duration = probe_duration(audio_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -151,13 +184,16 @@ def assemble_video(audio_path: Path, narration: str, output_path: Path, topic: s
     write_ass_subtitles(narration, duration, ass_path, audio_path=audio_path)
     subtitles = _filter_path(ass_path)
     pexels_track = output_path.with_suffix(".pexels.mp4")
+    mixed_audio = output_path.with_suffix(".mixed.mp3")
+    _mix_science_audio(audio_path, duration, mixed_audio)
     has_pexels = build_pexels_track(os.getenv("PEXELS_API_KEY", "").strip(), topic, duration, pexels_track)
     if not has_pexels:
         ass_path.unlink(missing_ok=True)
         raise RuntimeError("لم تتوفر مقاطع Pexels كافية ومرتبطة بالموضوع؛ أوقفنا النشر.")
     try:
-        subprocess.run(["ffmpeg", "-y", "-i", str(pexels_track), "-i", str(audio_path), "-filter_complex", f"[0:v]subtitles='{subtitles}':fontsdir='/usr/share/fonts/truetype/dejavu'[v]", "-map", "[v]", "-map", "1:a:0", "-t", f"{duration:.3f}", "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "160k", "-shortest", "-movflags", "+faststart", str(output_path)], check=True)
+        subprocess.run(["ffmpeg", "-y", "-i", str(pexels_track), "-i", str(mixed_audio), "-filter_complex", f"[0:v]subtitles='{subtitles}':fontsdir='/usr/share/fonts/truetype/dejavu'[v]", "-map", "[v]", "-map", "1:a:0", "-t", f"{duration:.3f}", "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "160k", "-shortest", "-movflags", "+faststart", str(output_path)], check=True)
     finally:
         ass_path.unlink(missing_ok=True)
         pexels_track.unlink(missing_ok=True)
+        mixed_audio.unlink(missing_ok=True)
     return output_path
