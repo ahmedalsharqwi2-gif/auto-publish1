@@ -6,7 +6,7 @@ from scripts.assemble_video import write_ass_subtitles
 
 
 class VideoAssemblyTests(unittest.TestCase):
-    def test_subtitles_use_six_words_per_block_and_two_lines(self):
+    def test_subtitles_use_four_words_per_block_and_two_lines(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "captions.ass"
             write_ass_subtitles(
@@ -17,8 +17,9 @@ class VideoAssemblyTests(unittest.TestCase):
             text = path.read_text(encoding="utf-8")
             self.assertEqual(text.count("Dialogue:"), 2)
             self.assertIn(r"\N", text)
-            self.assertIn("واحد اثنان ثلاثة", text)
-            self.assertIn("أربعة خمسة ستة", text)
+            self.assertIn("واحد اثنان", text)
+            self.assertIn("ثلاثة أربعة", text)
+            self.assertIn("Noto Sans Arabic", text)
 
 
 if __name__ == "__main__":

@@ -155,7 +155,8 @@ jobs:
             tests.test_provider_pool \
             tests.test_publish_content \
             tests.test_quality_gate \
-            tests.test_tts_quality -v
+            tests.test_tts_quality \
+            tests.test_video_assembly -v
 
       - name: Validate publishing configuration
         env:
@@ -308,7 +309,7 @@ jobs:
           EDGE_TTS_VOICE: "ar-EG-ShakirNeural"
           SILMA_REFERENCE_PROFILE: ${{ inputs.voice_profile || 'auto' }}
           SILMA_VOICE_PROFILES_FILE: 'assets/voices/voice_profiles.json'
-          # سرعة أعلى قليلًا حتى تكون القراءة سريعة وممتعة بدون ابتلاع الكلمات.
+          # قراءة طبيعية أبطأ؛ لا نسرّع الصوت ولا نضغط الكلمات.
           SILMA_SPEED: '1.08'
           SILMA_MAX_ATTEMPTS: '2'
           SILMA_MIN_SCORE: '0.6'
@@ -316,7 +317,7 @@ jobs:
           WHISPER_MODEL: 'base'
           ASR_MIN_MATCH_RATIO: '0.82'
           SILMA_FALLBACK_TO_EDGE: 'true'
-          EDGE_TTS_RATE: "-8%"
+          EDGE_TTS_RATE: "-15%"
           EDGE_TTS_PITCH: "-2Hz"
           MUSIC_VOLUME: '0.07'
           DRY_RUN: ${{ inputs.dry_run && 'true' || 'false' }}
