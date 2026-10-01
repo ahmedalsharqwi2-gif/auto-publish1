@@ -28,6 +28,7 @@ from scripts import (
 )
 from scripts.assemble_video import assemble_video, probe_duration
 from scripts.publish_content import build_social_description
+from scripts.broll_quality_pipeline import evaluate as evaluate_broll
 
 MIN_AUDIO_SECONDS = float(os.getenv("MIN_AUDIO_SECONDS", "60"))
 MAX_AUDIO_SECONDS = float(os.getenv("MAX_AUDIO_SECONDS", "90"))
@@ -120,6 +121,21 @@ class AutoPublishPipeline:
                 topic=topic,
             )
             log.info(f"✓ Video assembled: {video_path}")
+
+            # Validate the rendered B-roll track before any external publish.
+            broll_report = evaluate_broll(
+                video_path,
+                manifest=None,
+                clips_dir=Path("output/pexels_clips"),
+                report_path=Path("state/montage_quality.json"),
+                expected="vertical",
+                min_clips=4,
+                max_black_seconds=0.30,
+            )
+            if not broll_report["passed"]:
+                log.error("B-roll/montage quality gate failed: %s", broll_report["errors"])
+                return False
+            log.info("✓ B-roll/montage quality gate passed (%d source clips)", broll_report["broll"]["clip_count"])
 
             # Step 7: Publish
             log.info("\n[Step 7] Publishing content...")
