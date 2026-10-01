@@ -44,6 +44,20 @@ class PublisherTests(unittest.TestCase):
         self.assertIn("mode: addToQueue", sent_query)
 
     @patch("scripts.publish_content.requests.post")
+    def test_platform_metadata_is_sent_for_youtube(self, post):
+        post.return_value.status_code = 200
+        post.return_value.json.return_value = {
+            "data": {"createPost": {"post": {"id": "post-yt", "dueAt": "queued"}}}
+        }
+        publisher = ContentPublisher()
+        publisher.buffer_api_key = "buffer-test"
+        publisher._create_buffer_post("yt-1", "title\n\ntext", "https://public/video.mp4", None, "youtube", "title")
+        sent_query = post.call_args.kwargs["json"]["query"]
+        self.assertIn("metadata", sent_query)
+        self.assertIn("categoryId", sent_query)
+        self.assertIn("madeForKids", sent_query)
+
+    @patch("scripts.publish_content.requests.post")
     @patch("scripts.publish_content.ContentPublisher._release_asset_url", return_value="https://public/video.mp4")
     def test_partial_channel_failure_returns_false(self, _asset, post):
         post.return_value.status_code = 200

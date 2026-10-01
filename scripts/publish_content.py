@@ -22,6 +22,17 @@ GITHUB_API = "https://api.github.com"
 DEFAULT_SERVICES = ("youtube", "tiktok", "instagram")
 
 
+def _graphql_input(value: object) -> str:
+    """Serialize a small Python object as a GraphQL input literal."""
+    if isinstance(value, dict):
+        return "{" + " ".join(f"{key}: {_graphql_input(item)}" for key, item in value.items()) + "}"
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if value is None:
+        return "null"
+    return json.dumps(str(value), ensure_ascii=False)
+
+
 def build_social_description(topic: str, narration: str) -> str:
     """Create non-empty platform metadata even when the model omits caption."""
     topic = " ".join(str(topic or "").split()).strip() or "اكتشاف علمي جديد"
@@ -130,10 +141,26 @@ class ContentPublisher:
             result.setdefault(service, channel_id)
         return {k: v for k, v in result.items() if k in services and v}
 
-    def _create_buffer_post(self, channel_id: str, text: str, media_url: str, due_at: Optional[str]) -> dict:
+    def _create_buffer_post(
+        self,
+        channel_id: str,
+        text: str,
+        media_url: str,
+        due_at: Optional[str],
+        service: str = "tiktok",
+        title: str = "اكتشاف علمي جديد",
+    ) -> dict:
         text_json = json.dumps(text, ensure_ascii=False)
         channel_json = json.dumps(channel_id)
         media_json = json.dumps(media_url)
+        metadata = None
+        if service == "youtube":
+            metadata = {"youtube": {"title": title[:100] or "اكتشاف علمي جديد", "categoryId": "27", "privacy": "public", "madeForKids": False, "notifySubscribers": False}}
+        elif service == "instagram":
+            metadata = {"instagram": {"type": "reel", "shouldShareToFeed": True}}
+        elif service == "facebook":
+            metadata = {"facebook": {"type": "reel"}}
+        metadata_clause = f"metadata: {_graphql_input(metadata)}" if metadata else ""
         if self.schedule_mode == "customScheduled":
             if not due_at:
                 raise RuntimeError("BUFFER_SCHEDULE_MODE=customScheduled يتطلب PUBLISH_DUE_AT")
@@ -148,6 +175,7 @@ class ContentPublisher:
             channelId: {channel_json}
             schedulingType: automatic
             {scheduling}
+            {metadata_clause}
             assets: [{{ video: {{ url: {media_json} }} }}]
           }}) {{
             ... on PostActionSuccess {{ post {{ id dueAt }} }}
@@ -200,7 +228,7 @@ class ContentPublisher:
                 failures[service] = "لا يوجد channel ID مضبوط"
                 continue
             try:
-                post = self._create_buffer_post(channel_id, post_text, media_url, due_at)
+                post = self._create_buffer_post(channel_id, post_text, media_url, due_at, service, title)
                 successes[service] = post
                 log.info("✓ Buffer confirmed %s post=%s dueAt=%s", service, post.get("id"), post.get("dueAt"))
             except Exception as exc:  # keep independent channel results visible
