@@ -14,6 +14,9 @@ jobs:
   diagnose-and-recover:
     if: ${{ github.event.workflow_run.conclusion == 'failure' || github.event.workflow_run.conclusion == 'cancelled' }}
     runs-on: ubuntu-latest
+    env:
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
     timeout-minutes: 10
     steps:
       - name: Diagnose failed run and recover safely
@@ -70,3 +73,23 @@ jobs:
             echo "The auto-healer intentionally did not retry after an external publish step to prevent duplicate posts."
           } > /tmp/issue.md
           gh issue create -R "$REPOSITORY" --title "$TITLE" --body-file /tmp/issue.md
+      - name: Send Telegram alert after unresolved failure
+        if: ${{ env.TELEGRAM_BOT_TOKEN != '' && env.TELEGRAM_CHAT_ID != '' }}
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          REPOSITORY: ${{ github.repository }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+        run: |
+          python - <<'PY'
+          import os, urllib.parse, urllib.request
+          text = (f"Auto-Heal failed\nRepository: {os.environ['REPOSITORY']}\n"
+                  f"Run: {os.environ['RUN_ID']}\n{os.environ['RUN_URL']}\n"
+                  "تم فتح GitHub Issue بالتشخيص.")
+          data = urllib.parse.urlencode({"chat_id": os.environ["TELEGRAM_CHAT_ID"], "text": text}).encode()
+          url = f"https://api.telegram.org/bot{os.environ['TELEGRAM_BOT_TOKEN']}/sendMessage"
+          with urllib.request.urlopen(urllib.request.Request(url, data=data), timeout=20) as response:
+              if response.status != 200:
+                  raise SystemExit(f"Telegram HTTP {response.status}")
+          PY
