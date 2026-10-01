@@ -9,6 +9,7 @@ import os
 import sys
 import json
 import logging
+import subprocess
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -51,6 +52,31 @@ def edge_fallback_voice(voice: Optional[str]) -> str:
     if voice and voice.startswith("ar-") and "Neural2" not in voice:
         return voice
     return EDGE_FALLBACK_VOICE
+
+
+def normalize_audio_duration(output_path: Path) -> None:
+    """Keep Edge output inside the publishing window without cutting speech."""
+    target = float(os.getenv("EDGE_TARGET_AUDIO_SECONDS", "82"))
+    minimum = float(os.getenv("MIN_AUDIO_SECONDS", "60"))
+    maximum = float(os.getenv("MAX_AUDIO_SECONDS", "90"))
+    probe = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+         "-of", "default=noprint_wrappers=1:nokey=1", str(output_path)],
+        capture_output=True, text=True, check=True,
+    )
+    duration = float(probe.stdout.strip())
+    if minimum <= duration <= maximum:
+        return
+    target = min(max(target, minimum + 1), maximum - 1)
+    factor = duration / target
+    temporary = output_path.with_suffix(".normalized.mp3")
+    subprocess.run(
+        ["ffmpeg", "-y", "-v", "error", "-i", str(output_path),
+         "-filter:a", f"atempo={factor:.6f}", "-codec:a", "libmp3lame", str(temporary)],
+        check=True,
+    )
+    temporary.replace(output_path)
+    log.info("Normalized Edge audio duration from %.2fs to target %.2fs", duration, target)
 
 
 def select_silma_profile() -> str:
@@ -172,6 +198,7 @@ class VoiceGenerator:
         try:
             result = asyncio.run(_generate())
             if result:
+                normalize_audio_duration(output_path)
                 # Check quality
                 score, audio_issues = self.quality_checker.check_audio_quality(output_path, text)
                 if audio_issues:
