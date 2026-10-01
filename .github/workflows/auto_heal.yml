@@ -1,0 +1,72 @@
+name: Auto-Heal Failed Workflow
+
+on:
+  workflow_run:
+    workflows: ["Auto publish videos (Cairo 14-18)"]
+    types: [completed]
+
+permissions:
+  actions: write
+  contents: read
+  issues: write
+
+jobs:
+  diagnose-and-recover:
+    if: ${{ github.event.workflow_run.conclusion == 'failure' || github.event.workflow_run.conclusion == 'cancelled' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Diagnose failed run and recover safely
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          LOG_FILE="/tmp/failed-run.log"
+          gh run view "$RUN_ID" -R "$REPOSITORY" --log-failed > "$LOG_FILE" 2>&1 || true
+          echo "Run: $RUN_ID / attempt: $RUN_ATTEMPT"
+          echo "--- failure signatures ---"
+          grep -E 'HTTP (402|408|429|500|502|503|504)|quota|rate limit|timeout|Timeout|RuntimeError:|ValueError:|quality gate failed|Process completed' "$LOG_FILE" | tail -n 60 || true
+
+          if grep -Eq 'Run python(3)? scripts/(publish_buffer|publish_youtube_direct)\.py' "$LOG_FILE"; then
+            PUBLISH_STARTED=true
+          else
+            PUBLISH_STARTED=false
+          fi
+
+          if grep -Eqi 'HTTP (402|408|429|500|502|503|504)|quota|rate limit|timed out|timeout|temporarily unavailable|quality gate failed|black-frame|نطق العربي منخفض|النص خارج النطاق' "$LOG_FILE"; then
+            DIAGNOSIS="Transient provider/runner error or recoverable content-quality gate detected."
+          else
+            DIAGNOSIS="Non-transient failure; manual code/configuration review is required."
+          fi
+
+          if [ "$RUN_ATTEMPT" = "1" ] && [ "$PUBLISH_STARTED" = "false" ]; then
+            echo "Recovery: rerunning failed jobs once (no publish step started)."
+            gh run rerun "$RUN_ID" -R "$REPOSITORY" --failed
+            exit 0
+          fi
+
+          TITLE="[auto-heal] $REPOSITORY run $RUN_ID requires attention"
+          if gh issue list -R "$REPOSITORY" --state all --search "$RUN_ID in:title" --limit 1 | grep -q "$RUN_ID"; then
+            echo "Issue already exists for run $RUN_ID"
+            exit 0
+          fi
+          {
+            echo "## Automatic workflow diagnosis"
+            echo
+            echo "- **Repository:** $REPOSITORY"
+            echo "- **Failed run:** https://github.com/$REPOSITORY/actions/runs/$RUN_ID"
+            echo "- **Attempt:** $RUN_ATTEMPT"
+            echo "- **Publish step started:** $PUBLISH_STARTED"
+            echo "- **Diagnosis:** $DIAGNOSIS"
+            echo
+            echo "### Evidence"
+            echo '```text'
+            grep -E 'HTTP (402|408|429|500|502|503|504)|quota|rate limit|timeout|Timeout|RuntimeError:|ValueError:|quality gate failed|Process completed' "$LOG_FILE" | tail -n 80 || true
+            echo '```'
+            echo
+            echo "The auto-healer intentionally did not retry after an external publish step to prevent duplicate posts."
+          } > /tmp/issue.md
+          gh issue create -R "$REPOSITORY" --title "$TITLE" --body-file /tmp/issue.md
