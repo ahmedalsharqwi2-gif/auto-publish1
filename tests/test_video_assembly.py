@@ -22,6 +22,13 @@ class VideoAssemblyTests(unittest.TestCase):
             self.assertIn("ثلاثة أربعة", text)
             self.assertIn("Noto Sans Arabic", text)
 
+    def test_captions_are_top_centered_below_mobile_notch_safe_area(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "captions.ass"
+            write_ass_subtitles("نص تجريبي للترجمة العربية", 5.0, path)
+            text = path.read_text(encoding="utf-8")
+        self.assertIn(",8,70,70,260,1", text)
+
     @patch("scripts.assemble_video.align_words_with_whisper", side_effect=RuntimeError("Whisper alignment too weak: 77/157 words"))
     def test_weak_whisper_alignment_falls_back_to_uniform_timing(self, align):
         with tempfile.TemporaryDirectory() as directory:

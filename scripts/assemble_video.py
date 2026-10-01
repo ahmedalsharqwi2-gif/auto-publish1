@@ -15,6 +15,8 @@ VIDEO_HEIGHT = 1920
 FPS = 30
 WORDS_PER_CAPTION_CHUNK = 4
 FONT_SIZE = 58
+# 9:16 render; keep captions below phone camera notches and platform chrome.
+CAPTION_TOP_SAFE_MARGIN = 260
 log = logging.getLogger(__name__)
 SFX_DIR = Path(__file__).resolve().parent.parent / "assets" / "sfx"
 SCIENCE_AMBIENCE_GAIN = 0.055
@@ -122,7 +124,7 @@ def align_words_with_whisper(audio_path: Path, script_words: list[str]) -> list[
 
 
 def _ass_header() -> str:
-    return ("[Script Info]\nScriptType: v4.00+\n" f"PlayResX: {VIDEO_WIDTH}\nPlayResY: {VIDEO_HEIGHT}\n" "WrapStyle: 2\nScaledBorderAndShadow: yes\n\n[V4+ Styles]\n" "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n" f"Style: Caption,Noto Sans Arabic,{FONT_SIZE},&H00FFFFFF,&H00FFFFFF,&H0010182B,&HAA000000,1,0,0,0,100,100,0,0,1,3,1,2,70,70,150,1\n\n" "[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n")
+    return ("[Script Info]\nScriptType: v4.00+\n" f"PlayResX: {VIDEO_WIDTH}\nPlayResY: {VIDEO_HEIGHT}\n" "WrapStyle: 2\nScaledBorderAndShadow: yes\n\n[V4+ Styles]\n" "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n" f"Style: Caption,Noto Sans Arabic,{FONT_SIZE},&H00FFFFFF,&H00FFFFFF,&H0010182B,&HAA000000,1,0,0,0,100,100,0,0,1,3,1,8,70,70,{CAPTION_TOP_SAFE_MARGIN},1\n\n" "[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n")
 
 
 def write_ass_subtitles(text: str, duration: float, ass_path: Path, audio_path: Path | None = None) -> None:
