@@ -160,7 +160,18 @@ class ContentPublisher:
             metadata = {"instagram": {"type": "reel", "shouldShareToFeed": True}}
         elif service == "facebook":
             metadata = {"facebook": {"type": "reel"}}
-        metadata_clause = f"metadata: {_graphql_input(metadata)}" if metadata else ""
+        if service == "youtube":
+            metadata_clause = (
+                "metadata: {youtube: {title: "
+                + json.dumps(title[:100] or "اكتشاف علمي جديد", ensure_ascii=False)
+                + ', categoryId: "27", privacy: public, madeForKids: false, notifySubscribers: false}}'
+            )
+        elif service == "instagram":
+            metadata_clause = "metadata: {instagram: {type: reel, shouldShareToFeed: true}}"
+        elif service == "facebook":
+            metadata_clause = "metadata: {facebook: {type: reel}}"
+        else:
+            metadata_clause = ""
         if self.schedule_mode == "customScheduled":
             if not due_at:
                 raise RuntimeError("BUFFER_SCHEDULE_MODE=customScheduled يتطلب PUBLISH_DUE_AT")
