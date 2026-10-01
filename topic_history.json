@@ -622,12 +622,13 @@
       "title": "ظاهرة تجمد الماء الساخن أسرع من البارد (تأثير مبيمبا)",
       "hook": "هل يمكن للماء أن يتجمد أسرع من البارد؟ هذا السؤال العلمي يثير فضول العلماء منذ عقود. يبدأ الأمر عندما ت وضع عينات من ماء بدرجات حرارة مختلفة في بيئة متساوية، فالماء الساخن قد يتجمد أسرع",
       "region": "",
-      "status": "reserved",
+      "status": "published",
       "source": "science-pipeline",
       "reservation_id": "c64197afc1f14c3c9579b8526c3a8dbe",
       "reserved_at": "2026-10-01T23:17:02Z",
       "run_id": "36938947838",
-      "repository": "ahmedalsharqwi2-gif/science-discovery-shorts"
+      "repository": "ahmedalsharqwi2-gif/science-discovery-shorts",
+      "published_at": "2026-10-01T23:17:10Z"
     }
   ]
 }
