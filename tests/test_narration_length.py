@@ -1,3 +1,4 @@
+import os
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -7,6 +8,12 @@ from scripts.generate_content import ContentGenerator
 
 
 class CurrentNarrationPolicyTests(unittest.TestCase):
+    def test_default_word_limits_leave_headroom_for_edge_tts(self):
+        with patch.dict(os.environ, {}, clear=True):
+            pipeline = main.AutoPublishPipeline()
+        self.assertEqual(pipeline.content_generator.min_words, 115)
+        self.assertEqual(pipeline.content_generator.max_words, 150)
+
     def test_publish_window_has_valid_order(self):
         self.assertGreater(main.MIN_AUDIO_SECONDS, 0)
         self.assertGreater(main.MAX_AUDIO_SECONDS, main.MIN_AUDIO_SECONDS)

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import difflib
+import logging
 import os
 import re
 import subprocess
@@ -14,6 +15,7 @@ VIDEO_HEIGHT = 1920
 FPS = 30
 WORDS_PER_CAPTION_CHUNK = 4
 FONT_SIZE = 58
+log = logging.getLogger(__name__)
 SFX_DIR = Path(__file__).resolve().parent.parent / "assets" / "sfx"
 SCIENCE_AMBIENCE_GAIN = 0.055
 SCIENCE_EVENT_GAIN = 0.18
@@ -128,7 +130,18 @@ def write_ass_subtitles(text: str, duration: float, ass_path: Path, audio_path: 
     if not words:
         raise ValueError("Narration contains no words for subtitles")
     if audio_path is not None:
-        events = align_words_with_whisper(audio_path, words)
+        try:
+            events = align_words_with_whisper(audio_path, words)
+        except Exception as exc:
+            log.warning(
+                "Whisper alignment unavailable (%s); using uniform subtitle timing",
+                exc,
+            )
+            per_word = duration / len(words)
+            events = [
+                {"text": word, "offset": index * per_word, "duration": per_word}
+                for index, word in enumerate(words)
+            ]
     else:
         per_word = duration / len(words)
         events = [{"text": w, "offset": i * per_word, "duration": per_word} for i, w in enumerate(words)]
