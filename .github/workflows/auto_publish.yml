@@ -259,7 +259,9 @@ jobs:
           GITHUB_REPOSITORY: ${{ github.repository }}
 
           # --- Duration and word-count window ---
-          MIN_AUDIO_SECONDS: '60'
+          # Natural speech is never time-stretched; accept recordings from
+          # 55s to 90s so a 59.95s render is not rejected at the boundary.
+          MIN_AUDIO_SECONDS: '55'
           MAX_AUDIO_SECONDS: '90'
           TARGET_AUDIO_SECONDS: '85'
           # main.py reads MIN_WORDS/MAX_WORDS; keep generated reels within
