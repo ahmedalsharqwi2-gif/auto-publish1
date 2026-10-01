@@ -29,6 +29,7 @@ from scripts import (
 from scripts.assemble_video import assemble_video, probe_duration
 from scripts.publish_content import build_social_description
 from scripts.broll_quality_pipeline import evaluate as evaluate_broll
+from scripts.topic_history import TopicHistory
 
 MIN_AUDIO_SECONDS = float(os.getenv("MIN_AUDIO_SECONDS", "60"))
 MAX_AUDIO_SECONDS = float(os.getenv("MAX_AUDIO_SECONDS", "90"))
@@ -49,6 +50,7 @@ class AutoPublishPipeline:
             min_acceptable_score=float(os.getenv("MIN_QUALITY_SCORE", "0.75"))
         )
         self.publisher = ContentPublisher()
+        self.topic_history_path = Path(os.getenv("TOPIC_HISTORY_FILE", "topic_history.json"))
 
     def run(self, category: str = "", topic: Optional[str] = None) -> bool:
         """Run the complete pipeline."""
@@ -64,6 +66,10 @@ class AutoPublishPipeline:
                 log.info(f"✓ Topic generated: {topic[:80]}...")
             else:
                 log.info(f"\n[Step 1] Using provided topic: {topic[:80]}...")
+
+            # Check the durable per-repository history even for an explicitly
+            # supplied topic; the generator also applies this gate itself.
+            TopicHistory(self.topic_history_path).check_unique({"title": topic})
 
             # Step 2: Generate narration
             log.info("\n[Step 2] Generating narration...")
@@ -148,6 +154,15 @@ class AutoPublishPipeline:
                 log.info("DRY RUN metadata: %s", description[:500])
                 return True
 
+            # Persist the reservation to the repository before contacting any
+            # external publisher. If the GitHub write fails, fail closed.
+            topic_candidate = {
+                "title": topic,
+                "hook": " ".join(checked_text.split()[:35]),
+            }
+            topic_history = TopicHistory(self.topic_history_path)
+            topic_history.reserve(topic_candidate, source="science-pipeline", commit=True)
+
             publish_success = self.publisher.publish_to_buffer(
                 video_path=video_path,
                 title=title,
@@ -158,6 +173,7 @@ class AutoPublishPipeline:
             if not publish_success:
                 log.error("Publishing was not confirmed for every configured channel")
                 return False
+            topic_history.mark_published(topic_candidate, commit=True)
             log.info("✓ Content published successfully to every configured channel")
 
             log.info("\n" + "="*60)
