@@ -20,7 +20,7 @@ class ContentLengthPolicyTests(unittest.TestCase):
     @patch("scripts.generate_content.llm_chat")
     def test_minor_upper_bound_overshoot_is_trimmed(self, llm_chat):
         narration = "هذه معلومة علمية مفيدة عن الكون والنجوم والمادة والطاقة " * 17
-        narration = " ".join(narration.split()[:151])
+        narration = " ".join(narration.split()[:162])
         llm_chat.return_value = narration
         generator = ContentGenerator(min_words=105, max_words=150)
         generator.grammar_fixer.fix_text = lambda text: (text, [])
