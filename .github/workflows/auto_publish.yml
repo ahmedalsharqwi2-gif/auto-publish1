@@ -245,7 +245,7 @@ jobs:
           # Edge speaks faster than SILMA; this larger window keeps the
           # generated narration inside the required 60–90 second duration.
           MIN_WORDS: '165'
-          MAX_WORDS: '190'
+          MAX_WORDS: '230'
           PUBLISH_CHANNELS: 'youtube,tiktok,instagram'
           PUBLISH_DRY_RUN: ${{ inputs.dry_run || false }}
           BUFFER_SCHEDULE_MODE: 'addToQueue'
