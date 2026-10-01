@@ -1,9 +1,9 @@
-name: Auto publish videos (Cairo 15-19)
-
+name: Auto publish videos (Cairo 14-18)
 on:
   schedule:
-    - cron: '0 11 * * *'
-    - cron: '0 15 * * *'
+    # Prepare one hour before the fixed Cairo publication slots 14:00 and 18:00.
+    - cron: '0 10 * * *'
+    - cron: '0 14 * * *'
   workflow_dispatch:
     inputs:
       voice_profile:
@@ -41,6 +41,30 @@ jobs:
           echo "Scheduled cron expression: ${{ github.event.schedule }}"
           echo "GitHub UTC time: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
           echo "Cairo local time: $(date '+%Y-%m-%d %H:%M:%S %Z')"
+      - name: Set fixed publication slot
+        env:
+          SCHEDULE_EXPR: ${{ github.event.schedule }}
+        run: |
+          python - <<'PY'
+          import os
+          from datetime import datetime, timedelta, timezone
+
+          now = datetime.now(timezone.utc)
+          expression = os.environ.get("SCHEDULE_EXPR", "")
+          target_hour = {"0 10 * * *": 11, "0 14 * * *": 15}.get(expression)
+          if target_hour is None:
+              slots = [now.replace(hour=11, minute=0, second=0, microsecond=0),
+                       now.replace(hour=15, minute=0, second=0, microsecond=0)]
+              target = next((slot for slot in slots if slot > now), slots[0] + timedelta(days=1))
+          else:
+              target = now.replace(hour=target_hour, minute=0, second=0, microsecond=0)
+              if target <= now:
+                  target += timedelta(days=1)
+          due_at = target.isoformat(timespec="seconds").replace("+00:00", "Z")
+          print(f"Fixed publication slot: {due_at} UTC")
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as env_file:
+              env_file.write(f"PUBLISH_DUE_AT={due_at}\n")
+          PY
 
       - uses: actions/checkout@v5
 
@@ -250,7 +274,8 @@ jobs:
           # Facebook in this repository's secret.
           PUBLISH_CHANNELS: 'tiktok,youtube,facebook'
           PUBLISH_DRY_RUN: ${{ inputs.dry_run || false }}
-          BUFFER_SCHEDULE_MODE: 'addToQueue'
+          # Publish at the fixed slot computed above, never at Buffer's queue time.
+          BUFFER_SCHEDULE_MODE: 'customScheduled'
           REQUIRE_EXTERNAL_SOURCES: 'false'
           EDITORIAL_REVIEW_ENABLED: 'true'
           MIN_TASHKEEL_COVERAGE_WARN: '0.85'
