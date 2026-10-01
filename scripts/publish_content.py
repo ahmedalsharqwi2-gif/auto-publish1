@@ -19,7 +19,9 @@ import requests
 log = logging.getLogger("pipeline")
 BUFFER_ENDPOINT = "https://api.buffer.com"
 GITHUB_API = "https://api.github.com"
-DEFAULT_SERVICES = ("youtube", "tiktok", "instagram")
+# The repository secret stores positional channel IDs as TikTok, YouTube,
+# Facebook; keep this order identical anywhere the workflow omits an override.
+DEFAULT_SERVICES = ("tiktok", "youtube", "facebook")
 
 
 def _graphql_input(value: object) -> str:

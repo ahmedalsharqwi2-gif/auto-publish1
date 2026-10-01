@@ -246,7 +246,9 @@ jobs:
           # generated narration inside the required 60–90 second duration.
           MIN_WORDS: '165'
           MAX_WORDS: '230'
-          PUBLISH_CHANNELS: 'youtube,tiktok,instagram'
+          # BUFFER_CHANNEL_IDS is stored positionally as TikTok, YouTube,
+          # Facebook in this repository's secret.
+          PUBLISH_CHANNELS: 'tiktok,youtube,facebook'
           PUBLISH_DRY_RUN: ${{ inputs.dry_run || false }}
           BUFFER_SCHEDULE_MODE: 'addToQueue'
           REQUIRE_EXTERNAL_SOURCES: 'false'
