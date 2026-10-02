@@ -44,37 +44,38 @@ jobs:
                   with urllib.request.urlopen(request, timeout=30) as response:
                       payload = json.load(response)
                   runs = payload.get("workflow_runs", [])
-                  latest = runs[0] if runs else None
               except (urllib.error.URLError, json.JSONDecodeError) as exc:
-                  latest = None
                   rows.append((label, "API ERROR", str(exc), ""))
                   failed = True
                   continue
 
-              if latest is None:
-                  state = "NO RUN"
-                  detail = "لم يُعثر على تشغيل مجدول"
+              today_runs = []
+              for run in runs:
+                  created = datetime.fromisoformat(run["created_at"].replace("Z", "+00:00"))
+                  if created.astimezone(cairo).date() == today:
+                      today_runs.append(run)
+
+              if len(today_runs) < 2:
+                  state = "INCOMPLETE"
+                  detail = f"اكتمل {len(today_runs)}/2 من التشغيلات المجدولة اليوم"
                   failed = True
+                  rows.append((label, state, detail, ""))
               else:
-                  created = datetime.fromisoformat(latest["created_at"].replace("Z", "+00:00"))
-                  local_date = created.astimezone(cairo).date()
-                  conclusion = latest.get("conclusion") or latest.get("status") or "unknown"
-                  if local_date != today:
-                      state = "STALE"
-                      detail = f"آخر تشغيل محليًا {local_date} ({conclusion})"
-                      failed = True
-                  elif conclusion == "success":
+                  today_runs = sorted(today_runs, key=lambda run: run["created_at"])[-2:]
+                  conclusions = [run.get("conclusion") or run.get("status") or "unknown" for run in today_runs]
+                  if all(conclusion == "success" for conclusion in conclusions):
                       state = "SUCCESS"
-                      detail = "اكتمل التشغيل المجدول بنجاح"
-                  elif conclusion in {"queued", "in_progress", "waiting"}:
+                      detail = "اكتمل تشغيلَا 12:00 و18:00 بنجاح"
+                  elif any(conclusion in {"queued", "in_progress", "waiting"} for conclusion in conclusions):
                       state = "RUNNING"
-                      detail = f"التشغيل الحالي: {conclusion}"
+                      detail = "أحد تشغيلَي اليوم ما زال قيد التنفيذ"
                       failed = True
                   else:
                       state = "FAILURE"
-                      detail = f"نتيجة التشغيل: {conclusion}"
+                      detail = "فشل أحد تشغيلَي النشر أو كلاهما"
                       failed = True
-                  rows.append((label, state, detail, latest.get("html_url", "")))
+                  links = " ".join(f"[سجل]({run.get('html_url', '')})" for run in today_runs if run.get("html_url"))
+                  rows.append((label, state, detail, links))
 
           generated = datetime.now(cairo).strftime("%Y-%m-%d %H:%M %Z")
           lines = [f"# تقرير النشر اليومي — {generated}", "", f"الموعد المحلي المفحوص: {today}", ""]
