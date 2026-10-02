@@ -232,8 +232,10 @@ jobs:
 
           PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
           PEXELS_REQUIRED: 'true'
-          TOPIC_BANK_REQUIRED: 'true'
-          TOPIC_BANK_FILE: 'TOPIC_BANK.md'
+          TOPIC_BANK_REQUIRED: 'false'
+          TOPIC_SELECTION_MODE: 'dynamic'
+          TOPIC_ROTATION_SEED: ${{ github.run_id }}
+          TOPIC_PERFORMANCE_FILE: 'topic_performance.json'
           BUFFER_API_KEY: ${{ secrets.BUFFER_API_KEY }}
           BUFFER_CHANNEL_IDS: ${{ secrets.BUFFER_CHANNEL_IDS }}
           GH_RELEASE_TOKEN: ${{ secrets.GITHUB_TOKEN }}

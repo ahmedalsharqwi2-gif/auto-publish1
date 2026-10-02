@@ -56,6 +56,35 @@ TOPIC_CATEGORIES = (
 
 TOPIC_HISTORY_FILE = Path(os.getenv("TOPIC_HISTORY_FILE", "topic_history.json"))
 TOPIC_BANK_FILE = Path(os.getenv("TOPIC_BANK_FILE", "TOPIC_BANK.md"))
+TOPIC_PERFORMANCE_FILE = Path(os.getenv("TOPIC_PERFORMANCE_FILE", "topic_performance.json"))
+
+
+def topic_performance_context(history: list[dict]) -> str:
+    """Use optional view/retention signals; otherwise use channel identity."""
+    candidates = []
+    if TOPIC_PERFORMANCE_FILE.exists():
+        try:
+            data = json.loads(TOPIC_PERFORMANCE_FILE.read_text(encoding="utf-8"))
+            candidates = data if isinstance(data, list) else data.get("topics", [])
+        except (OSError, json.JSONDecodeError):
+            candidates = []
+    candidates = candidates or history
+    scored = []
+    for item in candidates:
+        if not isinstance(item, dict):
+            continue
+        try:
+            views = float(item.get("views") or item.get("view_count") or 0)
+            retention = float(item.get("retention") or item.get("watch_percentage") or 0)
+        except (TypeError, ValueError):
+            continue
+        title = item.get("title") or item.get("topic")
+        if title and views > 0:
+            scored.append((views * (1.0 + retention / 100.0), str(title)))
+    if not scored:
+        return "لا تتوفر بيانات مشاهدة موثوقة؛ اعتمد على هوية القناة ودوّر الفئات والزاوية الإبداعية."
+    top = [title for _, title in sorted(scored, reverse=True)[:5]]
+    return "أنماط الموضوعات الأعلى أداءً سابقًا (استلهم الزاوية لا العنوان نفسه): " + json.dumps(top, ensure_ascii=False)
 
 
 def load_topic_bank(path: Path = TOPIC_BANK_FILE) -> list[dict[str, str]]:
@@ -182,7 +211,9 @@ class ContentGenerator:
 اجعل الفكرة قابلة للتحقق من مصادر علمية موثوقة، وابتعد عن الخرافات ونظريات المؤامرة
 والادعاءات الطبية الخطرة. استخدم سؤالاً أو مفارقة أو رقماً موثقاً في العنوان عندما
 يكون ذلك طبيعياً، لكن لا تستخدم كلمات مثل "صدمة" أو "لن تصدق" بلا معلومة حقيقية.
-أعد الموضوع والعنوان المقترح بالعربية فقط في سطرين."""
+أعد الموضوع والعنوان المقترح بالعربية فقط في سطرين.
+{topic_performance_context(existing)}
+معرّف التدوير لهذا التشغيل: {os.getenv('TOPIC_ROTATION_SEED', os.getenv('GITHUB_RUN_ID', 'session'))}. غيّر الموضوع والزاوية فعلًا في كل تشغيل."""
 
         if existing:
             prompt += (
