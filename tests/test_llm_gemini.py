@@ -9,12 +9,6 @@ class GeminiTokenBudgetTests(unittest.TestCase):
     def test_pooled_chat_falls_back_to_openai_compatible_provider(self):
         calls = []
 
-        def limited(*_args, **_kwargs):
-            calls.append("openrouter")
-            error = RuntimeError("OpenRouter HTTP 402")
-            error.status_code = 402
-            raise error
-
         def fallback(*_args, **_kwargs):
             calls.append("fallback")
             return "fallback-result"
@@ -26,7 +20,6 @@ class GeminiTokenBudgetTests(unittest.TestCase):
             patch.object(llm_gemini, "OPENROUTER_MODEL", "router-model"),
             patch.object(llm_gemini, "FALLBACK_API_KEY", "fallback-test"),
             patch.object(llm_gemini, "FALLBACK_MODEL", "fallback-model"),
-            patch.object(llm_gemini, "_openrouter_chat_once", side_effect=limited),
             patch.object(llm_gemini, "_fallback_chat_once", side_effect=fallback),
         ):
             result = llm_gemini.pooled_llm_chat(
@@ -34,7 +27,7 @@ class GeminiTokenBudgetTests(unittest.TestCase):
             )
 
         self.assertEqual(result, "fallback-result")
-        self.assertEqual(calls, ["openrouter", "fallback"])
+        self.assertEqual(calls, ["fallback"])
 
     def test_llm_chat_falls_back_to_openrouter_after_gemini_failure(self):
         response = SimpleNamespace(

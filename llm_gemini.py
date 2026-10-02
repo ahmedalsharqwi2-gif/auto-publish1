@@ -428,14 +428,6 @@ def pooled_llm_chat(messages, max_tokens=None, temperature=0.6, timeout=120) -> 
             rate_limit_per_second=float(os.getenv("GEMINI_RATE_LIMIT", "0.2")),
             burst=float(os.getenv("GEMINI_RATE_BURST", "1")),
         ))
-    if OPENROUTER_API_KEY and OPENROUTER_MODEL:
-        providers.append(Provider(
-            "openrouter",
-            lambda **_: _openrouter_chat_once(messages, max_tokens, temperature, timeout),
-            max_attempts=max(1, int(os.getenv("OPENROUTER_POOL_ATTEMPTS", "2"))),
-            rate_limit_per_second=float(os.getenv("OPENROUTER_RATE_LIMIT", "0.5")),
-            burst=float(os.getenv("OPENROUTER_RATE_BURST", "1")),
-        ))
     if FALLBACK_API_KEY and FALLBACK_MODEL:
         providers.append(Provider(
             "fallback",
@@ -443,6 +435,17 @@ def pooled_llm_chat(messages, max_tokens=None, temperature=0.6, timeout=120) -> 
             max_attempts=FALLBACK_RETRIES,
             rate_limit_per_second=float(os.getenv("FALLBACK_RATE_LIMIT", "0.5")),
             burst=float(os.getenv("FALLBACK_RATE_BURST", "1")),
+        ))
+    # OpenRouter is deliberately last: HTTP 402 means account credit is
+    # unavailable and must never be the first production dependency when a
+    # configured OpenAI-compatible fallback can serve the episode.
+    if OPENROUTER_API_KEY and OPENROUTER_MODEL:
+        providers.append(Provider(
+            "openrouter",
+            lambda **_: _openrouter_chat_once(messages, max_tokens, temperature, timeout),
+            max_attempts=max(1, int(os.getenv("OPENROUTER_POOL_ATTEMPTS", "2"))),
+            rate_limit_per_second=float(os.getenv("OPENROUTER_RATE_LIMIT", "0.5")),
+            burst=float(os.getenv("OPENROUTER_RATE_BURST", "1")),
         ))
     if not providers:
         raise RuntimeError("No LLM provider credentials are configured")
