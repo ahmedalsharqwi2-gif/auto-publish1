@@ -30,6 +30,18 @@ class TopicHistoryTests(unittest.TestCase):
         }
         self.assertIsNotNone(find_duplicate(proposed, previous))
 
+    def test_generic_hook_or_caption_does_not_block_a_new_title(self):
+        previous = [{
+            "title": "كيف تتكون العواصف الشمسية",
+            "hook": "قصة مذهلة تكشف سرًا غامضًا وتجيب عن سؤال مهم",
+            "caption": "شاهد قصة مذهلة واكتشف الحقيقة",
+        }]
+        proposed = {
+            "title": "كيف تتكون العواصف الرملية في الصحراء",
+            "hook": "قصة علمية عن حركة الرياح وحبات الرمل",
+        }
+        self.assertIsNone(find_duplicate(proposed, previous))
+
     def test_unrelated_subject_is_not_blocked(self):
         previous = [{"title": "لغز اختفاء سفينة ماري سيليست في المحيط الأطلسي"}]
         proposed = {"title": "كيف يخزن الدماغ الذكريات أثناء النوم"}

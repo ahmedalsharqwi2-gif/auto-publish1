@@ -59,41 +59,37 @@ def normalize_text(value: Any) -> str:
     return " ".join(tokens)
 
 
-def _is_similar(left: Any, right: Any) -> bool:
+def _is_similar(left: Any, right: Any, *, field: str = "title") -> bool:
+    """Detect the same subject without blocking on generic narration wording.
+
+    Titles are the identity signal. Hooks are checked only against hooks and
+    require a stronger match because they often contain reusable boilerplate.
+    """
     a, b = normalize_text(left), normalize_text(right)
     if not a or not b:
         return False
     if a == b:
         return True
-    if min(len(a), len(b)) < 12:
-        return False
-    ratio = SequenceMatcher(None, a, b, autojunk=False).ratio()
-    if ratio >= 0.86:
-        return True
     words_a, words_b = a.split(), b.split()
     ta, tb = set(words_a), set(words_b)
-    bigrams_a = set(zip(words_a, words_a[1:]))
-    bigrams_b = set(zip(words_b, words_b[1:]))
-    if bigrams_a & bigrams_b:
-        return True
     overlap = len(ta & tb)
-    if overlap < 2:
+    min_words = min(len(ta), len(tb))
+    if min_words < (3 if field == "title" else 4):
         return False
-    containment = overlap / min(len(ta), len(tb))
-    jaccard = overlap / len(ta | tb)
-    if min(len(ta), len(tb)) <= 4 and containment >= 0.75:
-        return True
-    return containment >= 0.80 or jaccard >= 0.66
+    ratio = SequenceMatcher(None, a, b, autojunk=False).ratio()
+    if field == "title":
+        # Reworded titles for the same incident remain blocked, but a shared
+        # generic phrase or one broad topic word is not enough.
+        return ratio >= 0.90 or (overlap >= 3 and overlap / min_words >= 0.80)
+    # Hooks are supplementary evidence only; require near identity.
+    return ratio >= 0.94 or (overlap >= 4 and overlap / min_words >= 0.85)
 
-
-def _topic_fields(value: Any) -> list[str]:
+def _topic_fields(value: Any, *, kind: str) -> list[str]:
     if isinstance(value, str):
         fields = [clean_text(value)]
     elif isinstance(value, dict):
-        fields = [
-            clean_text(value.get(key))
-            for key in ("title", "topic", "subject", "hook", "hook_text", "summary", "premise", "caption")
-        ]
+        keys = ("title", "topic", "subject") if kind == "title" else ("hook", "hook_text", "summary", "premise")
+        fields = [clean_text(value.get(key)) for key in keys]
     else:
         fields = []
     result: list[str] = []
@@ -105,15 +101,76 @@ def _topic_fields(value: Any) -> list[str]:
             seen.add(normalized)
     return result
 
-
 def find_duplicate(candidate: Any, entries: list[dict[str, Any]]) -> dict[str, Any] | None:
-    proposed = _topic_fields(candidate)
+    proposed_titles = _topic_fields(candidate, kind="title")
+    proposed_hooks = _topic_fields(candidate, kind="hook")
     for entry in entries:
-        previous = _topic_fields(entry)
-        if any(_is_similar(new, old) for new in proposed for old in previous):
+        previous_titles = _topic_fields(entry, kind="title")
+        previous_hooks = _topic_fields(entry, kind="hook")
+        if any(_is_similar(new, old, field="title") for new in proposed_titles for old in previous_titles):
+            return entry
+        if proposed_hooks and previous_hooks and any(
+            _is_similar(new, old, field="hook") for new in proposed_hooks for old in previous_hooks
+        ):
             return entry
     return None
 
+
+def _is_similar(left: Any, right: Any, *, field: str = "title") -> bool:
+    """Detect the same subject without blocking on generic narration wording.
+
+    Titles are the identity signal. Hooks are checked only against hooks and
+    require a stronger match because they often contain reusable boilerplate.
+    """
+    a, b = normalize_text(left), normalize_text(right)
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    words_a, words_b = a.split(), b.split()
+    ta, tb = set(words_a), set(words_b)
+    overlap = len(ta & tb)
+    min_words = min(len(ta), len(tb))
+    if min_words < (3 if field == "title" else 4):
+        return False
+    ratio = SequenceMatcher(None, a, b, autojunk=False).ratio()
+    if field == "title":
+        # Reworded titles for the same incident remain blocked, but a shared
+        # generic phrase or one broad topic word is not enough.
+        return ratio >= 0.90 or (overlap >= 3 and overlap / min_words >= 0.80)
+    # Hooks are supplementary evidence only; require near identity.
+    return ratio >= 0.94 or (overlap >= 4 and overlap / min_words >= 0.85)
+
+def _topic_fields(value: Any, *, kind: str) -> list[str]:
+    if isinstance(value, str):
+        fields = [clean_text(value)]
+    elif isinstance(value, dict):
+        keys = ("title", "topic", "subject") if kind == "title" else ("hook", "hook_text", "summary", "premise")
+        fields = [clean_text(value.get(key)) for key in keys]
+    else:
+        fields = []
+    result: list[str] = []
+    seen: set[str] = set()
+    for field in fields:
+        normalized = normalize_text(field)
+        if normalized and normalized not in seen:
+            result.append(field)
+            seen.add(normalized)
+    return result
+
+def find_duplicate(candidate: Any, entries: list[dict[str, Any]]) -> dict[str, Any] | None:
+    proposed_titles = _topic_fields(candidate, kind="title")
+    proposed_hooks = _topic_fields(candidate, kind="hook")
+    for entry in entries:
+        previous_titles = _topic_fields(entry, kind="title")
+        previous_hooks = _topic_fields(entry, kind="hook")
+        if any(_is_similar(new, old, field="title") for new in proposed_titles for old in previous_titles):
+            return entry
+        if proposed_hooks and previous_hooks and any(
+            _is_similar(new, old, field="hook") for new in proposed_hooks for old in previous_hooks
+        ):
+            return entry
+    return None
 
 def prompt_topics(entries: list[dict[str, Any]], limit: int = 100) -> str:
     """Serialize only short title/hook labels as JSON data for a model prompt."""
