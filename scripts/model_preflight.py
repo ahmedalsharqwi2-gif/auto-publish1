@@ -99,11 +99,24 @@ def discover_gemini(policy: dict) -> tuple[str, list[str]]:
     if status != 200 or not available:
         log(f"Gemini catalog unusable (HTTP {status}, {len(available)} generative models); skipping provider", warning=True)
         return "", []
+    # Listing models is not sufficient: restricted keys can list a model but
+    # receive 404 on its detail/generation endpoint. Confirm the selected
+    # candidates individually before exporting them to the production step.
     selected, fallbacks = select(preferred, configured, available)
-    if not selected:
-        log(f"Gemini catalog has no selectable model; skipping provider (available={available[:8]})", warning=True)
+    verified = []
+    for candidate in [selected, *fallbacks]:
+        detail_status, detail = request_json(
+            f"https://generativelanguage.googleapis.com/v1beta/models/{urllib.parse.quote(candidate, safe='')}?key={urllib.parse.quote(key)}"
+        )
+        methods = detail.get("supportedGenerationMethods", []) if isinstance(detail, dict) else []
+        if detail_status == 200 and "generateContent" in methods:
+            verified.append(candidate)
+        else:
+            log(f"Gemini model {candidate} failed detail validation (HTTP {detail_status}); skipping", warning=True)
+    if not verified:
+        log("Gemini has no individually verified generative model; skipping provider", warning=True)
         return "", []
-    return selected, fallbacks
+    return verified[0], verified[1:6]
 
 
 def discover_openai_provider(name: str, endpoint: str, key: str, preferred: list[str], configured_names: tuple[str, ...], default: str) -> tuple[str, list[str]]:
@@ -135,9 +148,10 @@ def write_env(values: dict[str, str]) -> None:
             print(f"{key}={value}")
         return
     with open(path, "a", encoding="utf-8") as output:
+        # Always write every key, including empty values, so a failed provider
+        # discovery cannot leak a stale default into the generation step.
         for key, value in values.items():
-            if value:
-                output.write(f"{key}={value}\n")
+            output.write(f"{key}={value}\n")
 
 
 def main() -> int:

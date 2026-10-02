@@ -142,7 +142,7 @@ def gemini_chat(
 
     for model in GEMINI_MODELS:
         url = f"{GEMINI_BASE_URL}/models/{model}:generateContent"
-        use_thinking = bool(GEMINI_THINKING_LEVEL)
+        use_thinking = bool(GEMINI_THINKING_LEVEL) and GEMINI_MIN_OUTPUT_TOKENS > 0
 
         for attempt in range(1, attempts + 1):
             requested_tokens = max_tokens
