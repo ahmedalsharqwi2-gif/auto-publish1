@@ -650,11 +650,23 @@
       "region": "",
       "status": "published",
       "source": "science-pipeline",
-      "reservation_id": "1bcd18f85cee4cc690600770b91ba221",
       "reserved_at": "2026-10-02T02:58:29Z",
+      "published_at": "2026-10-02T02:58:35Z",
       "run_id": "36957528932",
-      "repository": "ahmedalsharqwi2-gif/science-discovery-shorts",
-      "published_at": "2026-10-02T02:58:35Z"
+      "reservation_id": "1bcd18f85cee4cc690600770b91ba221",
+      "repository": "ahmedalsharqwi2-gif/science-discovery-shorts"
+    },
+    {
+      "id": "0738ec850d9a3ed2423d",
+      "title": "الذكاء الاصطناعي في الطب",
+      "hook": "هل يمكن للآلة أن تشخص الأمراض بدقة تفوق البشر؟ نعم، فالذكاء الاصطناعي ي حدث ثورة في مجال الطب. تقوم خوارزمياته بتحليل كميات هائلة من البيانات الطبية، كصور الأشعة والسجلات الصحية للمرضى. هذا يمكنها من اكتشاف",
+      "region": "",
+      "status": "reserved",
+      "source": "science-pipeline",
+      "reservation_id": "330bc9cf6ffd4105b5f6ba552ded3a22",
+      "reserved_at": "2026-10-02T12:55:22Z",
+      "run_id": "37008956689",
+      "repository": "ahmedalsharqwi2-gif/science-discovery-shorts"
     }
   ]
 }
