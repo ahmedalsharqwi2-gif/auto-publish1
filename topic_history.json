@@ -635,12 +635,13 @@
       "title": "وكلاء الذكاء الاصطناعي",
       "hook": "أ ل م ي ت ع ج ب القارئ أن بعض الوكالات لا تستطيع تفسير الصورة كأنها تتكلم؟ هذه الفجوة في علم الذكاء الاصطناعي ت ظهر أن الوكالات البرمجية التي تحكم في تشغيل الخوارزميات لا",
       "region": "",
-      "status": "reserved",
+      "status": "published",
       "source": "science-pipeline",
       "reservation_id": "02ab23f6253647cab068e6cb4a467400",
       "reserved_at": "2026-10-02T02:07:42Z",
       "run_id": "36953655167",
-      "repository": "ahmedalsharqwi2-gif/science-discovery-shorts"
+      "repository": "ahmedalsharqwi2-gif/science-discovery-shorts",
+      "published_at": "2026-10-02T02:07:48Z"
     }
   ]
 }
