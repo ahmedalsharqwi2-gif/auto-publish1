@@ -1,0 +1,54 @@
+name: Renew topic bank
+
+on:
+  workflow_dispatch:
+    inputs:
+      write:
+        description: "Persist accepted candidates to TOPIC_BANK.md"
+        required: false
+        default: false
+        type: boolean
+  schedule:
+    - cron: "17 4 * * 1"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: topic-bank-renewal
+  cancel-in-progress: false
+
+jobs:
+  renew:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install renewal dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Renew safely
+        env:
+          YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY || secrets.GOOGLE_API_KEY }}
+          TOPIC_MIN_SCORE: "70"
+        run: >-
+          python scripts/renew_topic_bank.py
+          --kind science
+          --history topic_history.json
+          ${{ (github.event_name == 'schedule' || inputs.write == true) && '--write' || '' }}
+      - name: Commit accepted topics
+        if: ${{ github.event_name == 'schedule' || inputs.write == true }}
+        run: |
+          git config user.name "topic-bank-bot"
+          git config user.email "topic-bank-bot@users.noreply.github.com"
+          git add TOPIC_BANK.md
+          if git diff --cached --quiet; then
+            echo "No accepted topic-bank changes"
+            exit 0
+          fi
+          git commit -m "chore: renew topic bank [skip ci]"
+          git push

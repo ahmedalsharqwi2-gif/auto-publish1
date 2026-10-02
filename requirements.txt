@@ -4,3 +4,5 @@ numpy>=1.26.0
 av<19
 silma-tts
 faster-whisper
+pytrends>=4.9.2
+urllib3>=1.26,<2.0
