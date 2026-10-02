@@ -92,7 +92,8 @@ def discover_gemini(policy: dict) -> tuple[str, list[str]]:
     for item in payload.get("models", []):
         name = str(item.get("name", "")).removeprefix("models/")
         methods = item.get("supportedGenerationMethods", [])
-        if name and "generateContent" in methods and "embedding" not in name.lower():
+        if (name and "generateContent" in methods
+                and not any(token in name.lower() for token in ("embedding", "tts", "audio"))):
             available.append(name)
     if status == 400:
         raise SystemExit("MODEL_PREFLIGHT_ERROR: Gemini returned HTTP 400; key or request is invalid")
