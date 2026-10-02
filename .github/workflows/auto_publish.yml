@@ -253,6 +253,8 @@ jobs:
 
           PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
           PEXELS_REQUIRED: 'true'
+          TOPIC_BANK_REQUIRED: 'true'
+          TOPIC_BANK_FILE: 'TOPIC_BANK.md'
           BUFFER_API_KEY: ${{ secrets.BUFFER_API_KEY }}
           BUFFER_CHANNEL_IDS: ${{ secrets.BUFFER_CHANNEL_IDS }}
           GH_RELEASE_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -334,6 +336,15 @@ jobs:
           ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0 output/final_video.mp4
           ffprobe -v error -show_entries format=duration -of csv=p=0 output/final_video.mp4
           echo "Professional vertical montage with topic-specific Pexels B-roll verified."
+
+      - name: Run B-roll quality gate before publishing
+        run: |
+          python scripts/broll_quality_pipeline.py \
+            --video output/final_video.mp4 \
+            --clips-dir output/pexels_clips \
+            --expected vertical \
+            --min-clips 4 \
+            --max-black-seconds 0.30
 
       - name: Upload Fact Check report
         if: always()

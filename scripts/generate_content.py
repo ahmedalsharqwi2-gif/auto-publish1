@@ -55,6 +55,31 @@ TOPIC_CATEGORIES = (
 )
 
 TOPIC_HISTORY_FILE = Path(os.getenv("TOPIC_HISTORY_FILE", "topic_history.json"))
+TOPIC_BANK_FILE = Path(os.getenv("TOPIC_BANK_FILE", "TOPIC_BANK.md"))
+
+
+def load_topic_bank(path: Path = TOPIC_BANK_FILE) -> list[dict[str, str]]:
+    """Read the ranked Markdown topic table as data, not prompt instructions."""
+    if not path.exists():
+        return []
+    entries = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        match = re.match(r"^\|\s*\d+\s*\|\s*(.*?)\s*\|\s*(.*?)\s*\|\s*(.*?)\s*\|\s*$", line)
+        if match:
+            entries.append({"title": match.group(1), "hook": match.group(2), "keywords": match.group(3)})
+    return entries
+
+
+def select_topic_from_bank(entries: list[dict[str, str]], history: list[dict]) -> dict[str, str] | None:
+    """Return the highest-ranked bank item that is not in durable history."""
+    used_titles = {
+        " ".join(str(item.get("title") or item.get("topic") or item.get("subject") or "").split()).casefold()
+        for item in history
+    }
+    for entry in entries:
+        if " ".join(entry["title"].split()).casefold() not in used_titles:
+            return entry
+    return None
 
 
 def normalize_topic_response(response: str) -> str:
@@ -127,6 +152,12 @@ class ContentGenerator:
         categories = "\n".join(f"- {item}" for item in TOPIC_CATEGORIES)
         requested_category = category if category and category not in {"عام", "general"} else "اختر الفئة الأنسب تلقائياً"
         existing = TopicHistory(self.topic_history_path).entries
+        if os.getenv("TOPIC_BANK_REQUIRED", "false").lower() == "true":
+            bank_topic = select_topic_from_bank(load_topic_bank(), existing)
+            if not bank_topic:
+                raise ValueError("بنك المواضيع فارغ أو استُهلك بالكامل؛ أوقف التشغيل بدل اختيار موضوع عشوائي")
+            log.info("Selected ranked topic-bank item: %s", bank_topic["title"])
+            return bank_topic["title"]
         prompt = f"""أنت محرر علمي لقناة عربية قصيرة.
 وصف القناة:
 {CHANNEL_BRIEF}
