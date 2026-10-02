@@ -185,6 +185,9 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           LLM_FALLBACK_API_KEY: ${{ secrets.LLM_FALLBACK_API_KEY || secrets.GROQ_API_KEY }}
           LLM_FALLBACK_ENDPOINT: ${{ vars.LLM_FALLBACK_ENDPOINT || 'https://api.groq.com/openai/v1/chat/completions' }}
+          # Verified Groq model; preflight still confirms it is exposed by the
+          # account before the provider is considered healthy.
+          LLM_FALLBACK_MODEL: ${{ vars.LLM_FALLBACK_MODEL || vars.GROQ_MODEL || 'llama-3.1-8b-instant' }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           MODEL_POLICY_FILE: config/model_policy.json
         run: python scripts/model_preflight.py
@@ -217,6 +220,7 @@ jobs:
           # --- Third provider: any OpenAI-compatible endpoint (Groq by default) ---
           LLM_FALLBACK_API_KEY: ${{ secrets.LLM_FALLBACK_API_KEY || secrets.GROQ_API_KEY }}
           LLM_FALLBACK_ENDPOINT: ${{ vars.LLM_FALLBACK_ENDPOINT || 'https://api.groq.com/openai/v1/chat/completions' }}
+          LLM_FALLBACK_MODEL: ${{ vars.LLM_FALLBACK_MODEL || vars.GROQ_MODEL || 'llama-3.1-8b-instant' }}
           # Resolve this per-run from the provider's /models endpoint above.
           LLM_FALLBACK_REASONING_EFFORT: 'low'
           LLM_FALLBACK_RETRIES: '2'
