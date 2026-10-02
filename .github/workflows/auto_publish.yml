@@ -203,9 +203,10 @@ jobs:
           GEMINI_RETRIES: '3'
           # A 175–195 Arabic-word narration is required in practice: the
           # configured Edge voice produced 43.85s for 138 words in dry-run,
-          # below the 55s publication gate. Keep the request under the tested
-          # OpenRouter credit ceiling (233 affordable tokens).
-          LLM_MAX_COMPLETION_TOKENS: '224'
+          # below the 55s publication gate. GPT-OSS returned 123 words at
+          # 224 tokens, so give the validated Groq fallback enough headroom
+          # to reach the 175–195 word editorial window.
+          LLM_MAX_COMPLETION_TOKENS: '320'
           LLM_TIMEOUT: '45'
 
           # --- LLM provider: OpenRouter (optional fallback only) ---
