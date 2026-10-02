@@ -201,11 +201,11 @@ jobs:
           GEMINI_THINKING_LEVEL: 'low'
           GEMINI_MIN_OUTPUT_TOKENS: '0'
           GEMINI_RETRIES: '3'
-          # A 175–195 Arabic-word narration is required in practice: the
+          # A 160–168 Arabic-word narration is required in practice: the
           # configured Edge voice produced 43.85s for 138 words in dry-run,
           # below the 55s publication gate. GPT-OSS returned 155 words at
           # 320 tokens, so give the validated Groq fallback enough headroom
-          # to reach the 175–195 word editorial window.
+          # to stay inside the verified 55–90 second audio window.
           LLM_MAX_COMPLETION_TOKENS: '448'
           LLM_TIMEOUT: '45'
 
@@ -247,9 +247,9 @@ jobs:
           MAX_AUDIO_SECONDS: '90'
           TARGET_AUDIO_SECONDS: '85'
           # main.py reads MIN_WORDS/MAX_WORDS; the final MP3 duration remains
-          # the authoritative gate around this safer 175–195 word window.
-          MIN_WORDS: '175'
-          MAX_WORDS: '195'
+          # the authoritative gate around this safer 160–168 word window.
+          MIN_WORDS: '160'
+          MAX_WORDS: '168'
           # BUFFER_CHANNEL_IDS is stored positionally as TikTok, YouTube,
           # Facebook in this repository's secret.
           PUBLISH_CHANNELS: 'tiktok,youtube,facebook'
