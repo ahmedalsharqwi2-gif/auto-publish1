@@ -661,12 +661,13 @@
       "title": "الذكاء الاصطناعي في الطب",
       "hook": "هل يمكن للآلة أن تشخص الأمراض بدقة تفوق البشر؟ نعم، فالذكاء الاصطناعي ي حدث ثورة في مجال الطب. تقوم خوارزمياته بتحليل كميات هائلة من البيانات الطبية، كصور الأشعة والسجلات الصحية للمرضى. هذا يمكنها من اكتشاف",
       "region": "",
-      "status": "reserved",
+      "status": "published",
       "source": "science-pipeline",
       "reservation_id": "330bc9cf6ffd4105b5f6ba552ded3a22",
       "reserved_at": "2026-10-02T12:55:22Z",
       "run_id": "37008956689",
-      "repository": "ahmedalsharqwi2-gif/science-discovery-shorts"
+      "repository": "ahmedalsharqwi2-gif/science-discovery-shorts",
+      "published_at": "2026-10-02T12:55:29Z"
     }
   ]
 }
