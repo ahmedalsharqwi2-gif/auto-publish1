@@ -61,12 +61,15 @@ FALLBACK_ENDPOINT = os.getenv(
 FALLBACK_MODEL = os.getenv("LLM_FALLBACK_MODEL", "").strip()
 FALLBACK_RETRIES = max(1, int(os.getenv("LLM_FALLBACK_RETRIES", "2")))
 FALLBACK_REASONING_EFFORT = os.getenv("LLM_FALLBACK_REASONING_EFFORT", "low").strip()
-DEFAULT_MAX_OUTPUT_TOKENS = max(256, int(os.getenv("LLM_MAX_COMPLETION_TOKENS", "512")))
+MIN_OUTPUT_TOKENS = 64
+DEFAULT_MAX_OUTPUT_TOKENS = max(
+    MIN_OUTPUT_TOKENS, int(os.getenv("LLM_MAX_COMPLETION_TOKENS", "512"))
+)
 
 
 def _output_token_limit(value: int | None) -> int:
     """Use the deployment budget unless a caller explicitly overrides it."""
-    return max(256, int(value if value is not None else DEFAULT_MAX_OUTPUT_TOKENS))
+    return max(MIN_OUTPUT_TOKENS, int(value if value is not None else DEFAULT_MAX_OUTPUT_TOKENS))
 
 
 def _fallback_reasoning_effort() -> str:
