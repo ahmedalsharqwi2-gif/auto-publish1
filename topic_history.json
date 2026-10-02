@@ -648,12 +648,13 @@
       "title": "لماذا يهلوس الذكاء الاصطناعي؟",
       "hook": "الذكاء الاصطناعي ظهر كأحد أهم الإنجازات التقنية في العقود الأخيرة، لكنه لا يخلو من مشكلات ت عر ف بـ«التحي ز الخوارزمي». تعتمد خوارزميات التعلم العميق على مجموعات بيانات ت جمع من مصادر متعددة؛ إذا كانت",
       "region": "",
-      "status": "reserved",
+      "status": "published",
       "source": "science-pipeline",
       "reservation_id": "1bcd18f85cee4cc690600770b91ba221",
       "reserved_at": "2026-10-02T02:58:29Z",
       "run_id": "36957528932",
-      "repository": "ahmedalsharqwi2-gif/science-discovery-shorts"
+      "repository": "ahmedalsharqwi2-gif/science-discovery-shorts",
+      "published_at": "2026-10-02T02:58:35Z"
     }
   ]
 }
