@@ -198,11 +198,11 @@ jobs:
           GEMINI_THINKING_LEVEL: 'low'
           GEMINI_MIN_OUTPUT_TOKENS: '0'
           GEMINI_RETRIES: '3'
-          # A concise 115–150 Arabic-word narration keeps Edge TTS below the
-          # 90-second publish limit with headroom for slower pronunciations.
-          # The smaller request also helps avoid OpenRouter HTTP 402 when
-          # account credits fluctuate.
-          LLM_MAX_COMPLETION_TOKENS: '192'
+          # A 175–195 Arabic-word narration is required in practice: the
+          # configured Edge voice produced 43.85s for 138 words in dry-run,
+          # below the 55s publication gate. Keep the request under the tested
+          # OpenRouter credit ceiling (233 affordable tokens).
+          LLM_MAX_COMPLETION_TOKENS: '224'
           LLM_TIMEOUT: '45'
 
           # --- LLM provider: OpenRouter (optional fallback only) ---
@@ -241,12 +241,10 @@ jobs:
           MIN_AUDIO_SECONDS: '55'
           MAX_AUDIO_SECONDS: '90'
           TARGET_AUDIO_SECONDS: '85'
-          # main.py reads MIN_WORDS/MAX_WORDS; the final MP3 duration is the
-          # authoritative gate. Edge Arabic at the configured -15% rate can
-          # make 190 words exceed 90 seconds (observed: 101.98s), so keep the
-          # generated narration within a safer 115–150 word window.
-          MIN_WORDS: '115'
-          MAX_WORDS: '150'
+          # main.py reads MIN_WORDS/MAX_WORDS; the final MP3 duration remains
+          # the authoritative gate around this safer 175–195 word window.
+          MIN_WORDS: '175'
+          MAX_WORDS: '195'
           # BUFFER_CHANNEL_IDS is stored positionally as TikTok, YouTube,
           # Facebook in this repository's secret.
           PUBLISH_CHANNELS: 'tiktok,youtube,facebook'
