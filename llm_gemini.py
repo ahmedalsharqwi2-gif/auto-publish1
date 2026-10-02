@@ -36,7 +36,7 @@ GEMINI_BASE_URL = os.getenv(
 ).rstrip("/")
 GEMINI_MODELS = [
     model.strip()
-    for model in os.getenv("GEMINI_MODEL", "gemini-2.5-flash").split(",")
+    for model in os.getenv("GEMINI_MODEL", "").split(",")
     if model.strip()
 ]
 # Empty disables thinkingConfig. Use a model-appropriate value when enabled.
@@ -48,7 +48,7 @@ OPENROUTER_API_KEY = _clean_key(os.getenv("OPENROUTER_API_KEY"))
 OPENROUTER_ENDPOINT = os.getenv(
     "OPENROUTER_ENDPOINT", "https://openrouter.ai/api/v1/chat/completions"
 )
-OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "google/gemini-2.5-flash")
+OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "").strip()
 OPENROUTER_RETRIES = max(1, int(os.getenv("OPENROUTER_RETRIES", "2")))
 OPENROUTER_REFERER = os.getenv("OPENROUTER_REFERER", "https://github.com/")
 OPENROUTER_TITLE = os.getenv("OPENROUTER_TITLE", "Auto Publish Reels")
@@ -58,7 +58,7 @@ FALLBACK_API_KEY = _clean_key(
 FALLBACK_ENDPOINT = os.getenv(
     "LLM_FALLBACK_ENDPOINT", "https://api.groq.com/openai/v1/chat/completions"
 )
-FALLBACK_MODEL = os.getenv("LLM_FALLBACK_MODEL", "llama-3.3-70b-versatile")
+FALLBACK_MODEL = os.getenv("LLM_FALLBACK_MODEL", "").strip()
 FALLBACK_RETRIES = max(1, int(os.getenv("LLM_FALLBACK_RETRIES", "2")))
 FALLBACK_REASONING_EFFORT = os.getenv("LLM_FALLBACK_REASONING_EFFORT", "low").strip()
 DEFAULT_MAX_OUTPUT_TOKENS = max(256, int(os.getenv("LLM_MAX_COMPLETION_TOKENS", "512")))
@@ -256,7 +256,7 @@ def llm_chat(
     """Call Gemini, then OpenRouter when Gemini is unavailable."""
     max_tokens = _output_token_limit(max_tokens)
     errors: list[str] = []
-    if GEMINI_API_KEY:
+    if GEMINI_API_KEY and GEMINI_MODELS:
         try:
             return gemini_chat(
                 messages, max_tokens=max_tokens, temperature=temperature, timeout=timeout
@@ -267,7 +267,7 @@ def llm_chat(
     else:
         errors.append("gemini: API key is not set")
 
-    if OPENROUTER_API_KEY:
+    if OPENROUTER_API_KEY and OPENROUTER_MODEL:
         payload = {
             "model": OPENROUTER_MODEL,
             "messages": messages,
@@ -313,7 +313,7 @@ def llm_chat(
     else:
         errors.append("openrouter: API key is not set")
 
-    if FALLBACK_API_KEY:
+    if FALLBACK_API_KEY and FALLBACK_MODEL:
         try:
             return fallback_llm_chat(
                 messages, max_tokens=max_tokens, temperature=temperature, timeout=timeout
@@ -419,7 +419,7 @@ def pooled_llm_chat(messages, max_tokens=None, temperature=0.6, timeout=120) -> 
     """Provider-pool entry point: rate limit, circuit break, then fail over."""
     max_tokens = _output_token_limit(max_tokens)
     providers = []
-    if GEMINI_API_KEY:
+    if GEMINI_API_KEY and GEMINI_MODELS:
         providers.append(Provider(
             "gemini",
             lambda **_: gemini_chat(messages, max_tokens=max_tokens,
@@ -428,7 +428,7 @@ def pooled_llm_chat(messages, max_tokens=None, temperature=0.6, timeout=120) -> 
             rate_limit_per_second=float(os.getenv("GEMINI_RATE_LIMIT", "0.2")),
             burst=float(os.getenv("GEMINI_RATE_BURST", "1")),
         ))
-    if OPENROUTER_API_KEY:
+    if OPENROUTER_API_KEY and OPENROUTER_MODEL:
         providers.append(Provider(
             "openrouter",
             lambda **_: _openrouter_chat_once(messages, max_tokens, temperature, timeout),
@@ -436,7 +436,7 @@ def pooled_llm_chat(messages, max_tokens=None, temperature=0.6, timeout=120) -> 
             rate_limit_per_second=float(os.getenv("OPENROUTER_RATE_LIMIT", "0.5")),
             burst=float(os.getenv("OPENROUTER_RATE_BURST", "1")),
         ))
-    if FALLBACK_API_KEY:
+    if FALLBACK_API_KEY and FALLBACK_MODEL:
         providers.append(Provider(
             "fallback",
             lambda **_: _fallback_chat_once(messages, max_tokens, temperature, timeout),

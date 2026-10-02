@@ -21,8 +21,11 @@ class GeminiTokenBudgetTests(unittest.TestCase):
 
         with (
             patch.object(llm_gemini, "GEMINI_API_KEY", ""),
+            patch.object(llm_gemini, "GEMINI_MODELS", []),
             patch.object(llm_gemini, "OPENROUTER_API_KEY", "or-test"),
+            patch.object(llm_gemini, "OPENROUTER_MODEL", "router-model"),
             patch.object(llm_gemini, "FALLBACK_API_KEY", "fallback-test"),
+            patch.object(llm_gemini, "FALLBACK_MODEL", "fallback-model"),
             patch.object(llm_gemini, "_openrouter_chat_once", side_effect=limited),
             patch.object(llm_gemini, "_fallback_chat_once", side_effect=fallback),
         ):
@@ -41,7 +44,9 @@ class GeminiTokenBudgetTests(unittest.TestCase):
         )
         with (
             patch.object(llm_gemini, "GEMINI_API_KEY", "AIza-test"),
+            patch.object(llm_gemini, "GEMINI_MODELS", ["gemini-model"]),
             patch.object(llm_gemini, "OPENROUTER_API_KEY", "or-test"),
+            patch.object(llm_gemini, "OPENROUTER_MODEL", "router-model"),
             patch.object(llm_gemini, "OPENROUTER_RETRIES", 1),
             patch.object(llm_gemini, "gemini_chat", side_effect=RuntimeError("HTTP 503")),
             patch.object(llm_gemini.requests, "post", return_value=response) as post,
