@@ -663,11 +663,23 @@
       "region": "",
       "status": "published",
       "source": "science-pipeline",
-      "reservation_id": "330bc9cf6ffd4105b5f6ba552ded3a22",
       "reserved_at": "2026-10-02T12:55:22Z",
+      "published_at": "2026-10-02T12:55:29Z",
       "run_id": "37008956689",
-      "repository": "ahmedalsharqwi2-gif/science-discovery-shorts",
-      "published_at": "2026-10-02T12:55:29Z"
+      "reservation_id": "330bc9cf6ffd4105b5f6ba552ded3a22",
+      "repository": "ahmedalsharqwi2-gif/science-discovery-shorts"
+    },
+    {
+      "id": "859cf6213a1a09940463",
+      "title": "العودة إلى القمر",
+      "hook": "أ س ت ط يع الب ش ر أ ن ي س ت غ ن ي ع ن ق ر ب ة الق م ر ؟ نعم، فالتقنية الحديثة ت ح ق ق ذلك. أول",
+      "region": "",
+      "status": "reserved",
+      "source": "science-pipeline",
+      "reservation_id": "7cccfe83c121478cb0279135073de199",
+      "reserved_at": "2026-10-02T15:36:34Z",
+      "run_id": "37027408467",
+      "repository": "ahmedalsharqwi2-gif/science-discovery-shorts"
     }
   ]
 }
