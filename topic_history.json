@@ -674,12 +674,13 @@
       "title": "العودة إلى القمر",
       "hook": "أ س ت ط يع الب ش ر أ ن ي س ت غ ن ي ع ن ق ر ب ة الق م ر ؟ نعم، فالتقنية الحديثة ت ح ق ق ذلك. أول",
       "region": "",
-      "status": "reserved",
+      "status": "published",
       "source": "science-pipeline",
       "reservation_id": "7cccfe83c121478cb0279135073de199",
       "reserved_at": "2026-10-02T15:36:34Z",
       "run_id": "37027408467",
-      "repository": "ahmedalsharqwi2-gif/science-discovery-shorts"
+      "repository": "ahmedalsharqwi2-gif/science-discovery-shorts",
+      "published_at": "2026-10-02T15:36:40Z"
     }
   ]
 }
