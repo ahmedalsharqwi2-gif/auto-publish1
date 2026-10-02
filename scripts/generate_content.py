@@ -101,6 +101,18 @@ def normalize_topic_response(response: str) -> str:
     return re.sub(r"[*_`\"«»]", "", text.splitlines()[0] if text else "").strip()
 
 
+def trim_to_complete_sentence(text: str, max_words: int, min_words: int) -> str | None:
+    """Trim only at a sentence boundary; never feed a broken tail to TTS/captions."""
+    words = text.split()
+    if len(words) <= max_words:
+        return text
+    boundary = re.compile(r"[.!؟؛:]$")
+    for count in range(max_words, min_words - 1, -1):
+        if boundary.search(words[count - 1]):
+            return " ".join(words[:count]).strip()
+    return None
+
+
 def normalize_narration_response(response: str) -> str:
     """Extract narration text and remove transport wrappers from model output."""
     text = re.sub(r"```(?:json|markdown|text)?", "", response or "", flags=re.IGNORECASE)
@@ -257,9 +269,13 @@ class ContentGenerator:
                 # the retry path.
                 max_safe_overshoot = int(os.getenv("MAX_SAFE_WORD_OVERSHOOT", "20"))
                 if self.max_words < word_count <= self.max_words + max_safe_overshoot:
-                    fixed_narration = " ".join(fixed_narration.split()[:self.max_words]).rstrip("،؛:") + "。"
-                    word_count = len(fixed_narration.split())
-                    log.info("Trimmed minor narration overshoot to %d words", word_count)
+                    clipped = trim_to_complete_sentence(fixed_narration, self.max_words, self.min_words)
+                    if clipped:
+                        fixed_narration = clipped
+                        word_count = len(fixed_narration.split())
+                        log.info("Trimmed minor narration overshoot at a sentence boundary to %d words", word_count)
+                    else:
+                        log.warning("Oversized narration has no safe sentence boundary; requesting a rewrite")
                 log.info("Narration length: %d words (required %d–%d)", word_count, self.min_words, self.max_words)
                 if self.min_words <= word_count <= self.max_words:
                     break
@@ -268,8 +284,15 @@ class ContentGenerator:
             else:
                 final_count = len(fixed_narration.split())
                 if final_count > self.max_words:
-                    fixed_narration = " ".join(fixed_narration.split()[:self.max_words]).rstrip("،؛:") + "。"
-                    log.warning("Trimmed final narration from %d to %d words; audio speed is never altered", final_count, self.max_words)
+                    clipped = trim_to_complete_sentence(fixed_narration, self.max_words, self.min_words)
+                    if clipped:
+                        fixed_narration = clipped
+                        log.warning("Trimmed final narration at a sentence boundary from %d to %d words", final_count, len(fixed_narration.split()))
+                    else:
+                        raise ValueError(
+                            f"النص تجاوز الحد دون نهاية جملة آمنة بعد المحاولات: {final_count} كلمة، "
+                            f"المطلوب {self.min_words}-{self.max_words}"
+                        )
                 else:
                     raise ValueError(
                         f"النص خارج النطاق بعد ثلاث محاولات: {final_count} كلمة، "

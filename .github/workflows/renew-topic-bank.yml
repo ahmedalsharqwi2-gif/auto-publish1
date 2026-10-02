@@ -31,6 +31,11 @@ jobs:
           python-version: "3.11"
       - name: Install renewal dependencies
         run: python -m pip install -r requirements.txt
+      - name: Verify renewal tool
+        run: |
+          python -m py_compile scripts/renew_topic_bank.py
+          python -m unittest tests.test_renew_topic_bank -v
+          git diff --check
       - name: Renew safely
         env:
           YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY || secrets.GOOGLE_API_KEY }}
