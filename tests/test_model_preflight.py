@@ -13,6 +13,12 @@ class ModelPolicyTests(unittest.TestCase):
             self.assertTrue(provider["preferred_models"])
             self.assertIn(503, provider["retry_statuses"])
 
+
+    def test_select_never_returns_unlisted_or_stale_default(self):
+        from scripts.model_preflight import select
+        self.assertEqual(select(["old-model"], [], [], "old-model"), ("", []))
+        self.assertEqual(select(["old-model"], [], ["new-model"], "old-model"), ("new-model", []))
+
     def test_preflight_is_importable_without_third_party_dependencies(self):
         import scripts.model_preflight as preflight
         self.assertEqual(preflight.DEFAULT_GEMINI, "gemini-2.5-flash")

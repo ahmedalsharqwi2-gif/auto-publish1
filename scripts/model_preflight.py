@@ -64,12 +64,17 @@ def ids_from_openai(payload: dict) -> list[str]:
     return [str(item["id"]) for item in payload.get("data", []) if item.get("id")]
 
 
-def select(preferred: list[str], configured: list[str], available: list[str], default: str) -> tuple[str, list[str]]:
+def select(preferred: list[str], configured: list[str], available: list[str], default: str = "") -> tuple[str, list[str]]:
+    """Select only IDs confirmed by the provider catalog.
+
+    A configured/preferred ID is not evidence that the provider still serves it.
+    Returning an old default when discovery fails was the source of repeated
+    404s (notably llama-3.1-8b-instant).  An empty catalog means no safe choice.
+    """
+    del default  # kept in the signature for backwards-compatible callers
     available_set = set(available)
     ordered = list(dict.fromkeys(configured + preferred + available))
     selected = next((item for item in ordered if item in available_set), "")
-    if not selected:
-        selected = next((item for item in configured + preferred if item), default)
     fallbacks = [item for item in ordered if item in available_set and item != selected][:5]
     return selected, fallbacks
 
@@ -91,11 +96,13 @@ def discover_gemini(policy: dict) -> tuple[str, list[str]]:
             available.append(name)
     if status == 400:
         raise SystemExit("MODEL_PREFLIGHT_ERROR: Gemini returned HTTP 400; key or request is invalid")
-    if status not in (200,):
-        log(f"Gemini catalog returned HTTP {status}; keeping configured candidate and allowing provider fallback", warning=True)
-    selected, fallbacks = select(preferred, configured, available, DEFAULT_GEMINI)
-    if available and selected not in available:
-        raise SystemExit(f"MODEL_PREFLIGHT_ERROR: no configured Gemini model is available; available={available[:8]}")
+    if status != 200 or not available:
+        log(f"Gemini catalog unusable (HTTP {status}, {len(available)} generative models); skipping provider", warning=True)
+        return "", []
+    selected, fallbacks = select(preferred, configured, available)
+    if not selected:
+        log(f"Gemini catalog has no selectable model; skipping provider (available={available[:8]})", warning=True)
+        return "", []
     return selected, fallbacks
 
 
@@ -111,11 +118,13 @@ def discover_openai_provider(name: str, endpoint: str, key: str, preferred: list
         available = [item for item in available if not any(token in item.lower() for token in ("embedding", "whisper", "tts"))]
     if status == 400:
         raise SystemExit(f"MODEL_PREFLIGHT_ERROR: {name} returned HTTP 400 for /models")
-    if status not in (200,):
-        log(f"{name} catalog returned HTTP {status}; keeping configured candidate and allowing provider fallback", warning=True)
-    selected, fallbacks = select(preferred, configured, available, default)
-    if available and selected not in available:
-        raise SystemExit(f"MODEL_PREFLIGHT_ERROR: selected {name} model is not in its catalog: {selected}")
+    if status != 200 or not available:
+        log(f"{name} catalog unusable (HTTP {status}, {len(available)} models); skipping provider", warning=True)
+        return "", []
+    selected, fallbacks = select(preferred, configured, available)
+    if not selected:
+        log(f"{name} catalog has no selectable model; skipping provider (available={available[:8]})", warning=True)
+        return "", []
     return selected, fallbacks
 
 
