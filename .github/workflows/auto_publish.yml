@@ -202,7 +202,7 @@ jobs:
           # 90-second publish limit with headroom for slower pronunciations.
           # The smaller request also helps avoid OpenRouter HTTP 402 when
           # account credits fluctuate.
-          LLM_MAX_COMPLETION_TOKENS: '256'
+          LLM_MAX_COMPLETION_TOKENS: '192'
           LLM_TIMEOUT: '45'
 
           # --- LLM provider: OpenRouter (optional fallback only) ---
