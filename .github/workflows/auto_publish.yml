@@ -27,6 +27,7 @@ permissions:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+  PYTHONPATH: ${{ github.workspace }}
 
 jobs:
   publish:
@@ -179,41 +180,14 @@ jobs:
         run: |
           python -m arabic_speech_core.cli preflight --text "هذه عينة عربية قصيرة للتحقق من اللغة والمزود قبل توليد المحتوى العلمي." --engine edge --locale ar-SA --voice "$EDGE_TTS_VOICE" --lexicon config/arabic_pronunciation.json --min-words 8 --max-words 40
 
-      - name: Resolve available fallback model
+      - name: Validate and resolve AI model policy
         env:
-          FALLBACK_KEY: ${{ secrets.LLM_FALLBACK_API_KEY || secrets.GROQ_API_KEY }}
-          FALLBACK_ENDPOINT: ${{ vars.LLM_FALLBACK_ENDPOINT || 'https://api.groq.com/openai/v1/chat/completions' }}
-        run: |
-          if [ -z "$FALLBACK_KEY" ]; then
-            echo "No OpenAI-compatible fallback key; skipping model discovery."
-            exit 0
-          fi
-          MODELS_URL="${FALLBACK_ENDPOINT%/chat/completions}/models"
-          curl --fail --silent --show-error --max-time 20 \
-            -H "Authorization: Bearer $FALLBACK_KEY" "$MODELS_URL" > /tmp/fallback_models.json
-          SELECTED_MODEL="$(python - <<'PY'
-          import json
-          from pathlib import Path
-          preferred = (
-              "openai/gpt-oss-120b",
-              "openai/gpt-oss-20b",
-              "llama-3.3-70b-versatile",
-              "llama-3.1-8b-instant",
-              "moonshotai/kimi-k2-instruct",
-          )
-          data = json.loads(Path("/tmp/fallback_models.json").read_text())
-          ids = [str(item.get("id")) for item in data.get("data", []) if item.get("id")]
-          selected = next((name for name in preferred if name in ids), ids[0] if ids else "")
-          print(selected)
-          PY
-          )"
-          if [ -n "$SELECTED_MODEL" ]; then
-            echo "Resolved fallback model: $SELECTED_MODEL"
-            echo "LLM_FALLBACK_MODEL=$SELECTED_MODEL" >> "$GITHUB_ENV"
-          else
-            echo "ERROR: fallback endpoint returned no usable models"
-            exit 1
-          fi
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          LLM_FALLBACK_API_KEY: ${{ secrets.LLM_FALLBACK_API_KEY || secrets.GROQ_API_KEY }}
+          LLM_FALLBACK_ENDPOINT: ${{ vars.LLM_FALLBACK_ENDPOINT || 'https://api.groq.com/openai/v1/chat/completions' }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          MODEL_POLICY_FILE: config/model_policy.json
+        run: python scripts/model_preflight.py
 
       - name: Generate and publish
         env:
@@ -221,7 +195,6 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           # Check the exact model name in Google AI Studio; several names can be
           # given separated by commas and they are tried in order.
-          GEMINI_MODEL: 'gemini-3.8-flash,gemini-3.7-flash'
           GEMINI_THINKING_LEVEL: 'low'
           GEMINI_MIN_OUTPUT_TOKENS: '0'
           GEMINI_RETRIES: '3'
@@ -234,7 +207,6 @@ jobs:
 
           # --- LLM provider: OpenRouter (optional fallback only) ---
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          OPENROUTER_MODEL: 'google/gemini-2.5-flash'
           OPENROUTER_MAX_ATTEMPTS: '3'
           OPENROUTER_TITLE: 'Auto Publish Reels'
           GEMINI_RATE_LIMIT: '0.2'

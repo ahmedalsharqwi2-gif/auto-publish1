@@ -11,6 +11,11 @@ import json
 import logging
 import subprocess
 from pathlib import Path
+
+# Direct execution (python scripts/generate_voice.py) must see the repository root.
+ROOT_DIR = Path(__file__).resolve().parent.parent
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
 from typing import Optional, Tuple
 
 try:

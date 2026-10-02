@@ -2,7 +2,7 @@ name: Auto-Heal Failed Workflow
 
 on:
   workflow_run:
-    workflows: ["Auto publish videos (Cairo 14-18)"]
+    workflows: ["Auto publish videos (Cairo 12-18)"]
     types: [completed]
 
 permissions:

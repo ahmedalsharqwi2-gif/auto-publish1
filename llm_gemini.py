@@ -36,7 +36,7 @@ GEMINI_BASE_URL = os.getenv(
 ).rstrip("/")
 GEMINI_MODELS = [
     model.strip()
-    for model in os.getenv("GEMINI_MODEL", "gemini-3.8-flash").split(",")
+    for model in os.getenv("GEMINI_MODEL", "gemini-2.5-flash").split(",")
     if model.strip()
 ]
 # Empty disables thinkingConfig. Use a model-appropriate value when enabled.

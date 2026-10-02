@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "providers": {
+    "gemini": {
+      "enabled": true,
+      "preferred_models": [
+        "gemini-2.5-flash",
+        "gemini-2.0-flash"
+      ],
+      "retry_statuses": [
+        429,
+        500,
+        502,
+        503,
+        504
+      ]
+    },
+    "fallback": {
+      "enabled": true,
+      "preferred_models": [
+        "llama-3.1-8b-instant",
+        "llama-3.3-70b-versatile",
+        "openai/gpt-oss-20b"
+      ],
+      "retry_statuses": [
+        429,
+        500,
+        502,
+        503,
+        504
+      ]
+    },
+    "openrouter": {
+      "enabled": true,
+      "preferred_models": [
+        "google/gemini-2.5-flash",
+        "qwen/qwen3-32b"
+      ],
+      "retry_statuses": [
+        429,
+        500,
+        502,
+        503,
+        504
+      ]
+    }
+  }
+}
