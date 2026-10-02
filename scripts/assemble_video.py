@@ -22,6 +22,7 @@ SFX_DIR = Path(__file__).resolve().parent.parent / "assets" / "sfx"
 SCIENCE_AMBIENCE_GAIN = 0.055
 SCIENCE_EVENT_GAIN = 0.18
 ARABIC_DIACRITICS = re.compile(r"[\u0610-\u061A\u064B-\u065F\u0670\u06D6-\u06ED\u08D3-\u08FF]")
+BIDI_CONTROLS = re.compile(r"[\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]")
 PUNCTUATION = str.maketrans(".,،؛:!?؟…-—_()[]{}\"«»/\\", " " * 23)
 
 
@@ -49,6 +50,10 @@ def _ass_escape(text: str) -> str:
 
 
 def _display_word(word: str) -> str:
+    # ASS/libass performs Arabic shaping itself. Bidi control marks are
+    # presentation metadata, not part of a word; leaving them in the event
+    # payload can split a shaping run in some renderers.
+    word = BIDI_CONTROLS.sub("", word)
     return ARABIC_DIACRITICS.sub("", word).translate(PUNCTUATION).strip()
 
 
@@ -56,9 +61,9 @@ def _caption_text(words: list[str]) -> str:
     words = [_display_word(w) for w in words]
     words = [w for w in words if w]
     if len(words) <= 2:
-        return "\u200f" + " ".join(words)
+        return " ".join(words)
     midpoint = (len(words) + 1) // 2
-    return "\u200f" + " ".join(words[:midpoint]) + r"\N" + "\u200f" + " ".join(words[midpoint:])
+    return " ".join(words[:midpoint]) + r"\N" + " ".join(words[midpoint:])
 
 
 def _norm(word: str) -> str:

@@ -1,0 +1,126 @@
+name: Daily publish status (3 repositories)
+
+on:
+  # 18:00 UTC is after both Cairo publication slots in either Cairo offset.
+  schedule:
+    - cron: "0 18 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Build daily publication report
+        id: report
+        run: |
+          python - <<'PY'
+          import json
+          import urllib.error
+          import urllib.request
+          from datetime import datetime, timezone
+          from zoneinfo import ZoneInfo
+
+          repos = [
+              ("science-discovery-shorts", "auto_publish.yml", "العلوم"),
+              ("islamic-reminder-videos", "main.yml", "التذكيرات الإسلامية"),
+              ("arabic-horror-stories", "main.yml", "القصص المرعبة"),
+          ]
+          owner = "ahmedalsharqwi2-gif"
+          cairo = ZoneInfo("Africa/Cairo")
+          today = datetime.now(timezone.utc).astimezone(cairo).date()
+          rows = []
+          failed = False
+
+          for repo, workflow, label in repos:
+              url = f"https://api.github.com/repos/{owner}/{repo}/actions/workflows/{workflow}/runs?event=schedule&per_page=10"
+              request = urllib.request.Request(
+                  url,
+                  headers={"Accept": "application/vnd.github+json", "User-Agent": "daily-publish-status"},
+              )
+              try:
+                  with urllib.request.urlopen(request, timeout=30) as response:
+                      payload = json.load(response)
+                  runs = payload.get("workflow_runs", [])
+                  latest = runs[0] if runs else None
+              except (urllib.error.URLError, json.JSONDecodeError) as exc:
+                  latest = None
+                  rows.append((label, "API ERROR", str(exc), ""))
+                  failed = True
+                  continue
+
+              if latest is None:
+                  state = "NO RUN"
+                  detail = "لم يُعثر على تشغيل مجدول"
+                  failed = True
+              else:
+                  created = datetime.fromisoformat(latest["created_at"].replace("Z", "+00:00"))
+                  local_date = created.astimezone(cairo).date()
+                  conclusion = latest.get("conclusion") or latest.get("status") or "unknown"
+                  if local_date != today:
+                      state = "STALE"
+                      detail = f"آخر تشغيل محليًا {local_date} ({conclusion})"
+                      failed = True
+                  elif conclusion == "success":
+                      state = "SUCCESS"
+                      detail = "اكتمل التشغيل المجدول بنجاح"
+                  elif conclusion in {"queued", "in_progress", "waiting"}:
+                      state = "RUNNING"
+                      detail = f"التشغيل الحالي: {conclusion}"
+                      failed = True
+                  else:
+                      state = "FAILURE"
+                      detail = f"نتيجة التشغيل: {conclusion}"
+                      failed = True
+                  rows.append((label, state, detail, latest.get("html_url", "")))
+
+          generated = datetime.now(cairo).strftime("%Y-%m-%d %H:%M %Z")
+          lines = [f"# تقرير النشر اليومي — {generated}", "", f"الموعد المحلي المفحوص: {today}", ""]
+          lines.append("| المستودع | الحالة | التفاصيل | السجل |")
+          lines.append("|---|---|---|---|")
+          for label, state, detail, url in rows:
+              link = f"[فتح السجل]({url})" if url else "—"
+              lines.append(f"| {label} | **{state}** | {detail} | {link} |")
+          report = "\n".join(lines) + "\n"
+          with open("daily-publish-report.md", "w", encoding="utf-8") as output:
+              output.write(report)
+          with open("/tmp/daily-publish-report.txt", "w", encoding="utf-8") as output:
+              output.write(report)
+          with open(__import__("os").environ["GITHUB_STEP_SUMMARY"], "w", encoding="utf-8") as output:
+              output.write(report)
+          print(report)
+          if failed:
+              raise SystemExit("One or more scheduled publication checks are not successful")
+          PY
+
+      - name: Upload report artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: daily-publish-report
+          path: daily-publish-report.md
+          retention-days: 30
+
+      - name: Send Telegram alert
+        if: ${{ always() && secrets.TELEGRAM_BOT_TOKEN != '' && secrets.TELEGRAM_CHAT_ID != '' }}
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          python - <<'PY'
+          import os
+          import urllib.parse
+          import urllib.request
+
+          report = open("/tmp/daily-publish-report.txt", encoding="utf-8").read()
+          payload = urllib.parse.urlencode({
+              "chat_id": os.environ["TELEGRAM_CHAT_ID"],
+              "text": report[:3900],
+          }).encode()
+          url = f"https://api.telegram.org/bot{os.environ['TELEGRAM_BOT_TOKEN']}/sendMessage"
+          request = urllib.request.Request(url, data=payload, method="POST")
+          with urllib.request.urlopen(request, timeout=30) as response:
+              response.read()
+          PY

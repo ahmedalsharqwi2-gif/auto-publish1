@@ -1,8 +1,8 @@
-name: Auto publish videos (Cairo 14-18)
+name: Auto publish videos (Cairo 12-18)
 on:
   schedule:
-    # Prepare one hour before the fixed Cairo publication slots 12:00 and 18:00.
-    # GitHub Actions uses UTC: 08:00 and 14:00 UTC in the current Cairo offset.
+    # Preparation starts before the final Cairo publication slots. The job
+    # computes 12:00/18:00 Africa/Cairo below, including DST transitions.
     - cron: '0 8 * * *'
     - cron: '0 14 * * *'
   workflow_dispatch:
@@ -49,19 +49,21 @@ jobs:
           python - <<'PY'
           import os
           from datetime import datetime, timedelta, timezone
+          from zoneinfo import ZoneInfo
 
           now = datetime.now(timezone.utc)
+          cairo_now = now.astimezone(ZoneInfo("Africa/Cairo"))
           expression = os.environ.get("SCHEDULE_EXPR", "")
-          target_hour = {"0 8 * * *": 9, "0 14 * * *": 15}.get(expression)
+          target_hour = {"0 8 * * *": 12, "0 14 * * *": 18}.get(expression)
           if target_hour is None:
-              slots = [now.replace(hour=9, minute=0, second=0, microsecond=0),
-                       now.replace(hour=15, minute=0, second=0, microsecond=0)]
-              target = next((slot for slot in slots if slot > now), slots[0] + timedelta(days=1))
+              slots = [cairo_now.replace(hour=12, minute=0, second=0, microsecond=0),
+                       cairo_now.replace(hour=18, minute=0, second=0, microsecond=0)]
+              target = next((slot for slot in slots if slot > cairo_now), slots[0] + timedelta(days=1))
           else:
-              target = now.replace(hour=target_hour, minute=0, second=0, microsecond=0)
-              if target <= now:
+              target = cairo_now.replace(hour=target_hour, minute=0, second=0, microsecond=0)
+              if target <= cairo_now:
                   target += timedelta(days=1)
-          due_at = target.isoformat(timespec="seconds").replace("+00:00", "Z")
+          due_at = target.astimezone(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
           print(f"Fixed publication slot: {due_at} UTC")
           with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as env_file:
               env_file.write(f"PUBLISH_DUE_AT={due_at}\n")

@@ -3,10 +3,17 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from scripts.assemble_video import write_ass_subtitles
+from scripts.assemble_video import _caption_text, write_ass_subtitles
 
 
 class VideoAssemblyTests(unittest.TestCase):
+    def test_arabic_caption_payload_has_no_bidi_controls_that_break_shaping(self):
+        caption = _caption_text("هذا نص عربي سليم".split())
+
+        self.assertNotIn("\u200f", caption)
+        self.assertNotIn("\u200e", caption)
+        self.assertEqual(caption, "هذا نص\\Nعربي سليم")
+
     def test_subtitles_use_four_words_per_block_and_two_lines(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "captions.ass"
