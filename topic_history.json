@@ -676,11 +676,23 @@
       "region": "",
       "status": "published",
       "source": "science-pipeline",
-      "reservation_id": "7cccfe83c121478cb0279135073de199",
       "reserved_at": "2026-10-02T15:36:34Z",
+      "published_at": "2026-10-02T15:36:40Z",
       "run_id": "37027408467",
-      "repository": "ahmedalsharqwi2-gif/science-discovery-shorts",
-      "published_at": "2026-10-02T15:36:40Z"
+      "reservation_id": "7cccfe83c121478cb0279135073de199",
+      "repository": "ahmedalsharqwi2-gif/science-discovery-shorts"
+    },
+    {
+      "id": "accd2633d41603555f56",
+      "title": "كيف نعرف ما يحدث داخل الأرض أو على كوكب بعيد من دون الوصول إليه؟",
+      "hook": "الكرة الأرضية تتعرض للضغط الجوي المتغير الذي يخلق ظاهرة الأمطار، حيث تتكثف بخار الماء في الغلاف الجوي عند انخفاض درجات الحرارة أو عند تلامس الهواء مع مسطحات سطحية. عندما يقترب الهواء الدافئ من القمة أو",
+      "region": "",
+      "status": "reserved",
+      "source": "science-pipeline",
+      "reservation_id": "adbc5f8888db403c94e8335856c79b8d",
+      "reserved_at": "2026-10-03T16:20:01Z",
+      "run_id": "37136058754",
+      "repository": "ahmedalsharqwi2-gif/science-discovery-shorts"
     }
   ]
 }
