@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import re
+import base64
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
@@ -46,7 +47,10 @@ MAX_TOTAL_SOURCE_CHARS = int(os.getenv("FACT_CHECK_MAX_TOTAL_SOURCE_CHARS", "800
 FACT_CHECK_MAX_COMPLETION_TOKENS = max(1024, int(os.getenv("FACT_CHECK_MAX_COMPLETION_TOKENS", "2048")))
 REQUIRE_EXTERNAL_SOURCES = os.getenv("REQUIRE_EXTERNAL_SOURCES", "false").lower() == "true"
 USER_AGENT = "auto-publish1-fact-check/1.0"
-WEB_SEARCH_URL = os.getenv("FACT_CHECK_SEARCH_URL", "https://html.duckduckgo.com/html/")
+WEB_SEARCH_URLS = [
+    os.getenv("FACT_CHECK_SEARCH_URL", "https://html.duckduckgo.com/html/"),
+    "https://www.bing.com/search",
+]
 MAX_SEARCH_RESULTS = max(1, int(os.getenv("FACT_CHECK_MAX_SEARCH_RESULTS", "5")))
 
 
@@ -116,32 +120,54 @@ def _json_from_model(text: str) -> dict[str, Any]:
 
 def _search_result_urls(query: str) -> list[str]:
     """Return public web result URLs without restricting sources by domain."""
-    response = requests.get(
-        WEB_SEARCH_URL,
-        params={"q": query, "kl": "wt-wt", "df": "y"},
-        timeout=FETCH_TIMEOUT,
-        headers={"User-Agent": USER_AGENT},
-    )
-    response.raise_for_status()
     urls: list[str] = []
-    for raw_href in re.findall(
-        r'<a[^>]+class=["\'][^"\']*result__a[^"\']*["\'][^>]+href=["\']([^"\']+)',
-        response.text,
-        flags=re.I,
-    ):
-        parsed = urlparse(html.unescape(raw_href))
-        target = parse_qs(parsed.query).get("uddg", [raw_href])[0]
-        url = unquote(html.unescape(target)).strip()
-        target_host = urlparse(url).netloc.lower().split(":", 1)[0]
-        if urlparse(url).scheme not in {"http", "https"} or not target_host:
-            continue
-        # Wikipedia is explicitly excluded from automatic source discovery.
-        if target_host == "wikipedia.org" or target_host.endswith(".wikipedia.org"):
-            continue
-        if url not in urls:
-            urls.append(url)
-        if len(urls) >= MAX_SEARCH_RESULTS:
-            break
+    errors: list[str] = []
+    for search_url in WEB_SEARCH_URLS:
+        try:
+            response = requests.get(
+                search_url,
+                params={"q": query, "kl": "wt-wt", "df": "y"},
+                timeout=FETCH_TIMEOUT,
+                headers={"User-Agent": USER_AGENT},
+            )
+            response.raise_for_status()
+            if "bing.com" in search_url:
+                result_blocks = re.findall(r'<li class=["\']b_algo["\'].*?</li>', response.text, re.I | re.S)
+                raw_links = [
+                    href for block in result_blocks
+                    for href in re.findall(r'<a[^>]+href=["\']([^"\']+)', block, re.I)
+                ]
+            else:
+                raw_links = re.findall(
+                    r'<a[^>]+class=["\'][^"\']*result__a[^"\']*["\'][^>]+href=["\']([^"\']+)',
+                    response.text, flags=re.I,
+                )
+            for raw_href in raw_links:
+                raw_href = html.unescape(raw_href)
+                parsed = urlparse(raw_href)
+                if "bing.com" in search_url and parsed.netloc.endswith("bing.com"):
+                    encoded = parse_qs(parsed.query).get("u", [""])[0]
+                    if encoded.startswith("a1"):
+                        try:
+                            raw_href = base64.urlsafe_b64decode(encoded[2:] + "===").decode("utf-8")
+                        except (ValueError, UnicodeDecodeError):
+                            continue
+                target = parse_qs(parsed.query).get("uddg", [raw_href])[0]
+                url = unquote(html.unescape(target)).strip()
+                target_host = urlparse(url).netloc.lower().split(":", 1)[0]
+                if urlparse(url).scheme not in {"http", "https"} or not target_host:
+                    continue
+                # Wikipedia is explicitly excluded from automatic source discovery.
+                if target_host == "wikipedia.org" or target_host.endswith(".wikipedia.org"):
+                    continue
+                if url not in urls:
+                    urls.append(url)
+                if len(urls) >= MAX_SEARCH_RESULTS:
+                    return urls
+        except Exception as exc:
+            errors.append(f"{search_url}: {exc}")
+    if errors:
+        log.warning("Web search endpoints returned no complete result set: %s", "; ".join(errors)[:500])
     return urls
 
 
