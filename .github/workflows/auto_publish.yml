@@ -280,7 +280,6 @@ jobs:
           FACT_CHECK_MAX_SOURCE_CHARS: '6000'
           FACT_CHECK_MAX_TOTAL_SOURCE_CHARS: '8000'
           FACT_CHECK_MAX_COMPLETION_TOKENS: '2048'
-          WIKI_LANG: 'ar'
 
           # --- TTS ---
           TTS_ENGINE: "edge"

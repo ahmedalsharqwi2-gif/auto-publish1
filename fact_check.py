@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-Source-backed Fact Check using Wikipedia (Arabic).
-Fetches the Wikipedia article for the topic and verifies all claims against it.
+Source-backed Fact Check using general web sources.
+Searches the public web, extracts readable page text, and verifies all claims
+against the fetched sources. Wikipedia is intentionally excluded.
 
 Provider: Gemini (primary) -> OpenRouter (optional fallback).
 """
@@ -15,7 +16,7 @@ import re
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 import requests
 
@@ -45,7 +46,8 @@ MAX_TOTAL_SOURCE_CHARS = int(os.getenv("FACT_CHECK_MAX_TOTAL_SOURCE_CHARS", "800
 FACT_CHECK_MAX_COMPLETION_TOKENS = max(1024, int(os.getenv("FACT_CHECK_MAX_COMPLETION_TOKENS", "2048")))
 REQUIRE_EXTERNAL_SOURCES = os.getenv("REQUIRE_EXTERNAL_SOURCES", "false").lower() == "true"
 USER_AGENT = "auto-publish1-fact-check/1.0"
-WIKI_LANG = os.getenv("WIKI_LANG", "ar")
+WEB_SEARCH_URL = os.getenv("FACT_CHECK_SEARCH_URL", "https://html.duckduckgo.com/html/")
+MAX_SEARCH_RESULTS = max(1, int(os.getenv("FACT_CHECK_MAX_SEARCH_RESULTS", "5")))
 
 
 class FactCheckError(RuntimeError):
@@ -81,7 +83,6 @@ def _load_config(path: Path = DEFAULT_CONFIG) -> dict[str, Any]:
         raise FactCheckError(f"Cannot load Fact Check config: {path}: {exc}") from exc
     if not isinstance(data, dict):
         raise FactCheckError("Fact Check config must be a JSON object")
-    data["allowed_domains"] = [str(x).lower().lstrip(".") for x in data.get("allowed_domains", []) if str(x).strip()]
     data["minimum_confidence"] = float(data.get("minimum_confidence", MIN_CONFIDENCE))
     return data
 
@@ -113,39 +114,61 @@ def _json_from_model(text: str) -> dict[str, Any]:
     raise FactCheckError(f"No JSON in model response: {text[:300]}")
 
 
-def fetch_wikipedia_source(query: str) -> dict[str, str] | None:
-    """Search Wikipedia and return the top article's plain-text extract."""
+def _search_result_urls(query: str) -> list[str]:
+    """Return public web result URLs without restricting sources by domain."""
+    response = requests.get(
+        WEB_SEARCH_URL,
+        params={"q": query, "kl": "wt-wt", "df": "y"},
+        timeout=FETCH_TIMEOUT,
+        headers={"User-Agent": USER_AGENT},
+    )
+    response.raise_for_status()
+    urls: list[str] = []
+    for raw_href in re.findall(
+        r'<a[^>]+class=["\'][^"\']*result__a[^"\']*["\'][^>]+href=["\']([^"\']+)',
+        response.text,
+        flags=re.I,
+    ):
+        parsed = urlparse(html.unescape(raw_href))
+        target = parse_qs(parsed.query).get("uddg", [raw_href])[0]
+        url = unquote(html.unescape(target)).strip()
+        target_host = urlparse(url).netloc.lower().split(":", 1)[0]
+        if urlparse(url).scheme not in {"http", "https"} or not target_host:
+            continue
+        # Wikipedia is explicitly excluded from automatic source discovery.
+        if target_host == "wikipedia.org" or target_host.endswith(".wikipedia.org"):
+            continue
+        if url not in urls:
+            urls.append(url)
+        if len(urls) >= MAX_SEARCH_RESULTS:
+            break
+    return urls
+
+
+def fetch_web_sources(query: str) -> list[dict[str, str]]:
+    """Search and fetch readable pages from any public web domain."""
     try:
-        search_url = f"https://{WIKI_LANG}.wikipedia.org/w/api.php"
-        params = {
-            "action": "query", "list": "search", "srsearch": query,
-            "format": "json", "srlimit": "3", "utf8": "1",
-        }
-        r = requests.get(search_url, params=params, timeout=15,
-                         headers={"User-Agent": USER_AGENT})
-        r.raise_for_status()
-        results = r.json().get("query", {}).get("search", [])
-        if not results:
-            return None
-        title = results[0]["title"]
-        params2 = {
-            "action": "query", "prop": "extracts", "explaintext": "1",
-            "titles": title, "format": "json", "redirects": "1", "utf8": "1",
-        }
-        r2 = requests.get(search_url, params=params2, timeout=15,
-                          headers={"User-Agent": USER_AGENT})
-        r2.raise_for_status()
-        pages = r2.json().get("query", {}).get("pages", {})
-        for page in pages.values():
-            text = page.get("extract", "") or ""
-            if len(text) > 300:
-                url = f"https://{WIKI_LANG}.wikipedia.org/wiki/{quote(title.replace(' ', '_'))}"
-                log.info("Wikipedia source: %s (%d chars)", url, len(text))
-                return {"url": url, "text": text[:MAX_SOURCE_CHARS]}
-        return None
+        urls = _search_result_urls(query)
     except Exception as exc:
-        log.warning("Wikipedia fetch failed for %r: %s", query, exc)
-        return None
+        log.warning("General web search failed for %r: %s", query, exc)
+        return []
+
+    sources: list[dict[str, str]] = []
+    for url in urls:
+        try:
+            response = requests.get(url, timeout=FETCH_TIMEOUT, headers={"User-Agent": USER_AGENT})
+            response.raise_for_status()
+            parser = _VisibleTextParser()
+            parser.feed(response.text)
+            text = re.sub(r"\s+", " ", " ".join(parser.parts)).strip()
+            if len(text) < 300:
+                log.info("Skipping source with insufficient readable text: %s", url)
+                continue
+            sources.append({"url": url, "text": text[:MAX_SOURCE_CHARS]})
+            log.info("Web source: %s (%d chars)", url, len(text))
+        except Exception as exc:
+            log.warning("Web source fetch failed for %s: %s", url, exc)
+    return sources
 
 
 def _llm_call(system: str, user: str, max_tokens: int = FACT_CHECK_MAX_COMPLETION_TOKENS) -> dict[str, Any]:
@@ -255,7 +278,7 @@ supported يتطلب دليلاً واضحًا في المصدر.
 def fact_check_topic(topic: Any, output_path: Path | None = None,
                      prefetched_sources: list[dict[str, str]] | None = None,
                      preflight_source_errors: list[dict[str, str]] | None = None) -> dict[str, Any]:
-    """Fact-check a topic against Wikipedia or the provided sources."""
+    """Fact-check a topic against general web sources or provided sources."""
     report: dict[str, Any] = {
         "status": "REJECT", "title": str(_topic_value(topic, "title", "")),
         "source_urls": [], "claims": [], "errors": [],
@@ -291,21 +314,17 @@ def fact_check_topic(topic: Any, output_path: Path | None = None,
         if not sources and verified_fact:
             sources.append({"url": "topic-bank://verified_fact", "text": verified_fact})
 
-        # 3) Wikipedia fetch
+        # 3) General web search and page extraction; no domain allowlist.
         if not sources:
             query = title or script[:150]
-            wiki = fetch_wikipedia_source(query)
-            if wiki:
-                sources.append(wiki)
-            elif title and title != query:
-                wiki = fetch_wikipedia_source(script[:150])
-                if wiki:
-                    sources.append(wiki)
+            sources.extend(fetch_web_sources(query))
+            if not sources and title and title != query:
+                sources.extend(fetch_web_sources(script[:150]))
 
         if not sources:
             raise FactCheckError(
                 f"No source available for topic {title!r}. "
-                "Could not find a Wikipedia article."
+                "The public web search returned no readable source page."
             )
 
         # Trim total source size

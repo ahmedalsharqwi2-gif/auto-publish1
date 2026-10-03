@@ -51,7 +51,7 @@ class FactCheckTests(unittest.TestCase):
             patch("fact_check._load_config", return_value={"minimum_confidence": 0.85}),
             patch("fact_check._extract_claims", return_value=[{"claim": "حقيقة"}]),
             patch("fact_check._judge_claims", return_value=verdict),
-            patch("fact_check.fetch_wikipedia_source") as fetch,
+            patch("fact_check.fetch_web_sources") as fetch,
         ):
             report = fact_check_topic(self.topic, prefetched_sources=[self.source])
 
@@ -63,7 +63,7 @@ class FactCheckTests(unittest.TestCase):
         topic = dict(self.topic, verified_fact="")
         with (
             patch("fact_check._load_config", return_value={"minimum_confidence": 0.85}),
-            patch("fact_check.fetch_wikipedia_source", return_value=None),
+            patch("fact_check.fetch_web_sources", return_value=[]),
         ):
             report = fact_check_topic(topic)
 
