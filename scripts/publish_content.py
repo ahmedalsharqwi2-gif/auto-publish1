@@ -36,7 +36,12 @@ def _graphql_input(value: object) -> str:
 
 
 def build_social_description(topic: str, narration: str, source_urls: list[str] | None = None) -> str:
-    """Create non-empty platform metadata even when the model omits caption."""
+    """Create platform metadata without publishing source links.
+
+    ``source_urls`` remains an accepted argument for caller compatibility, but
+    scientific source URLs are deliberately kept out of public descriptions.
+    They are used only by the internal fact-check report.
+    """
     topic = " ".join(str(topic or "").split()).strip() or "اكتشاف علمي جديد"
     narration = " ".join(str(narration or "").split()).strip()
     body = narration[:4000] if narration else topic
@@ -44,9 +49,7 @@ def build_social_description(topic: str, narration: str, source_urls: list[str] 
     lowered = topic.lower()
     if any(word in lowered for word in ("فضاء", "كون", "كوكب", "نجمة", "ثقب")):
         tags.insert(1, "#فضاء")
-    sources = [str(url).strip() for url in (source_urls or []) if str(url).strip()]
-    source_block = "\n\nالمصادر العلمية:\n" + "\n".join(f"- {url}" for url in dict.fromkeys(sources)) if sources else ""
-    return f"{topic}\n\n{body}{source_block}\n\n{' '.join(dict.fromkeys(tags))}"
+    return f"{topic}\n\n{body}\n\n{' '.join(dict.fromkeys(tags))}"
 
 
 class ContentPublisher:

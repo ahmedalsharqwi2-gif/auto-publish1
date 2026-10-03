@@ -16,14 +16,14 @@ class PublisherTests(unittest.TestCase):
         self.assertIn("#علوم", text)
         self.assertIn("#فضاء", text)
 
-    def test_social_description_includes_only_verified_source_urls(self):
+    def test_social_description_never_publishes_source_urls(self):
         text = build_social_description(
             "ثقب أسود في الفضاء",
             "شرح علمي مختصر",
             source_urls=["https://nasa.gov/black-holes", "https://nasa.gov/black-holes"],
         )
-        self.assertIn("المصادر العلمية:", text)
-        self.assertEqual(text.count("https://nasa.gov/black-holes"), 1)
+        self.assertNotIn("المصادر العلمية:", text)
+        self.assertNotIn("https://nasa.gov/black-holes", text)
     def test_channel_map_accepts_json_and_positional_values(self):
         self.assertEqual(
             ContentPublisher._channel_map(
