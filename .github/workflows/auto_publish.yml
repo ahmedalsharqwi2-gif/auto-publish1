@@ -258,11 +258,11 @@ jobs:
           PUBLISH_DRY_RUN: ${{ inputs.dry_run || false }}
           # Publish at the fixed slot computed above, never at Buffer's queue time.
           BUFFER_SCHEDULE_MODE: 'customScheduled'
-          REQUIRE_EXTERNAL_SOURCES: 'false'
+          REQUIRE_EXTERNAL_SOURCES: 'true'
           EDITORIAL_REVIEW_ENABLED: 'true'
           MIN_TASHKEEL_COVERAGE_WARN: '0.85'
           MIN_TASHKEEL_COVERAGE_FATAL: '0.65'
-          FACT_CHECK_ENABLED: 'false'
+          FACT_CHECK_ENABLED: 'true'
           TOPIC_GENERATION_MAX_ATTEMPTS: '3'
           VOICE_ROTATION_ENABLED: 'true'
           VOICE_SELECTION_MODE: 'content'
@@ -273,7 +273,7 @@ jobs:
           # --- Topic history ---
           TOPIC_HISTORY_FILE: 'topic_history.json'
 
-          # --- Fact Check (uses Wikipedia as source) ---
+          # --- Mandatory scientific Fact Check and source attribution ---
           FACT_CHECK_SOURCES_FILE: 'config/fact_sources.json'
           FACT_CHECK_MODEL: 'google/gemma-4-26b-a4b-it:free,google/gemma-4-31b-it:free,nvidia/nemotron-3-super-120b-a12b:free'
           FACT_CHECK_MIN_CONFIDENCE: '0.85'
@@ -331,7 +331,7 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: fact-check-report
-          path: work/**/fact_check.json
+          path: state/fact_check.json
           if-no-files-found: ignore
 
       - name: Persist topic history

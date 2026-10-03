@@ -323,6 +323,10 @@ def fact_check_topic(topic: Any, output_path: Path | None = None,
 
         report["source_urls"] = [s["url"] for s in sources]
         report["sources_fetched"] = [s["url"] for s in sources]
+        if REQUIRE_EXTERNAL_SOURCES:
+            external = [url for url in report["source_urls"] if url.startswith(("https://", "http://"))]
+            if not external:
+                raise FactCheckError("External scientific source required; no verifiable URL was fetched")
 
         claims = _extract_claims(review_content)
         judged = _judge_claims(review_content, claims, sources)

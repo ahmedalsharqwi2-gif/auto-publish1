@@ -35,7 +35,7 @@ def _graphql_input(value: object) -> str:
     return json.dumps(str(value), ensure_ascii=False)
 
 
-def build_social_description(topic: str, narration: str) -> str:
+def build_social_description(topic: str, narration: str, source_urls: list[str] | None = None) -> str:
     """Create non-empty platform metadata even when the model omits caption."""
     topic = " ".join(str(topic or "").split()).strip() or "اكتشاف علمي جديد"
     narration = " ".join(str(narration or "").split()).strip()
@@ -44,7 +44,9 @@ def build_social_description(topic: str, narration: str) -> str:
     lowered = topic.lower()
     if any(word in lowered for word in ("فضاء", "كون", "كوكب", "نجمة", "ثقب")):
         tags.insert(1, "#فضاء")
-    return f"{topic}\n\n{body}\n\n{' '.join(dict.fromkeys(tags))}"
+    sources = [str(url).strip() for url in (source_urls or []) if str(url).strip()]
+    source_block = "\n\nالمصادر العلمية:\n" + "\n".join(f"- {url}" for url in dict.fromkeys(sources)) if sources else ""
+    return f"{topic}\n\n{body}{source_block}\n\n{' '.join(dict.fromkeys(tags))}"
 
 
 class ContentPublisher:

@@ -30,6 +30,7 @@ from scripts.assemble_video import assemble_video, probe_duration
 from scripts.publish_content import build_social_description
 from scripts.broll_quality_pipeline import evaluate as evaluate_broll
 from scripts.topic_history import TopicHistory
+from fact_check import fact_check_topic
 
 MIN_AUDIO_SECONDS = float(os.getenv("MIN_AUDIO_SECONDS", "60"))
 MAX_AUDIO_SECONDS = float(os.getenv("MAX_AUDIO_SECONDS", "90"))
@@ -84,6 +85,23 @@ class AutoPublishPipeline:
             if not text_report.is_acceptable:
                 log.error("Content quality not acceptable for publishing")
                 return False
+
+            # Scientific claims must be checked before any TTS, rendering, or
+            # external publication. The report is also the single source of
+            # truth for references shown in platform descriptions.
+            log.info("\n[Step 3.5] Fact-checking scientific claims...")
+            fact_report = fact_check_topic(
+                {
+                    "title": topic,
+                    "narration_script": checked_text,
+                },
+                output_path=Path("state/fact_check.json"),
+            )
+            if fact_report.get("status") != "PASS":
+                log.error("Scientific fact-check rejected the episode: %s", fact_report.get("errors"))
+                return False
+            source_urls = fact_report.get("source_urls", [])
+            log.info("✓ Scientific fact-check passed with %d source(s)", len(source_urls))
 
             # Step 4: Generate voice
             log.info("\n[Step 4] Generating voice...")
@@ -146,7 +164,7 @@ class AutoPublishPipeline:
             # Step 7: Publish
             log.info("\n[Step 7] Publishing content...")
             title = topic[:60]
-            description = build_social_description(topic, narration)
+            description = build_social_description(topic, narration, source_urls=source_urls)
             channels = os.getenv("PUBLISH_CHANNELS", "youtube,tiktok,instagram").split(",")
 
             if os.getenv("PUBLISH_DRY_RUN", "false").lower() == "true":
