@@ -284,11 +284,18 @@ class ContentGenerator:
                 if attempt:
                     current_count = len(fixed_narration.split())
                     missing = max(0, self.min_words - current_count)
+                    length_instruction = (
+                        f"النص السابق أطول من الحد: {current_count} كلمة. أعد كتابته في {self.min_words}-{self.max_words} كلمة بالضبط تقريبًا، "
+                        "واحذف التفاصيل الأقل أهمية. يجب أن تنتهي الجملة الأخيرة بعلامة ترقيم عربية أو نقطة، ولا تقطع أي جملة."
+                        if current_count > self.max_words else
+                        f"النص السابق عدد كلماته {current_count}، وينقصه {missing} كلمة على الأقل."
+                    )
                     request = (
-                        f"النص السابق عدد كلماته {current_count}، وينقصه {missing} كلمة على الأقل. "
                         f"أعد النص كاملًا بين {self.min_words} و{self.max_words} كلمة، "
-                        "وأضف شرحًا علميًا وأمثلة مرتبطة بالموضوع بدل الحشو. "
-                        "لا تختصره ولا تُرجع ملاحظات خارج النص.\n\n"
+                        "وأضف شرحًا علميًا وأمثلة مرتبطة بالموضوع بدل الحشو إن كان ناقصًا. "
+                        f"{length_instruction} "
+                        "يجب أن يكون الناتج نص السرد فقط، بلا عناوين أو تعداد أو ملاحظات خارج النص. "
+                        "حافظ على الحقائق الأساسية ولا تضف حشوًا.\n\n"
                         f"النص السابق:\n{fixed_narration}"
                     )
                 response = llm_chat(
