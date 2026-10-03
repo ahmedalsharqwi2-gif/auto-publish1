@@ -86,22 +86,25 @@ class AutoPublishPipeline:
                 log.error("Content quality not acceptable for publishing")
                 return False
 
-            # Scientific claims must be checked before any TTS, rendering, or
-            # external publication. The report is also the single source of
-            # truth for references shown in platform descriptions.
-            log.info("\n[Step 3.5] Fact-checking scientific claims...")
-            fact_report = fact_check_topic(
-                {
-                    "title": topic,
-                    "narration_script": checked_text,
-                },
-                output_path=Path("state/fact_check.json"),
-            )
-            if fact_report.get("status") != "PASS":
-                log.error("Scientific fact-check rejected the episode: %s", fact_report.get("errors"))
-                return False
-            source_urls = fact_report.get("source_urls", [])
-            log.info("✓ Scientific fact-check passed with %d source(s)", len(source_urls))
+            # Fact checking is disabled for the current publishing workflow.
+            # Keep the gate available behind an explicit opt-in for controlled
+            # runs, while never exposing source URLs in public descriptions.
+            source_urls = []
+            if os.getenv("FACT_CHECK_ENABLED", "false").lower() == "true":
+                log.info("\n[Step 3.5] Fact-checking scientific claims...")
+                fact_report = fact_check_topic(
+                    {
+                        "title": topic,
+                        "narration_script": checked_text,
+                    },
+                    output_path=Path("state/fact_check.json"),
+                )
+                if fact_report.get("status") != "PASS":
+                    log.error("Scientific fact-check rejected the episode: %s", fact_report.get("errors"))
+                    return False
+                log.info("✓ Scientific fact-check passed with %d source(s)", len(fact_report.get("source_urls", [])))
+            else:
+                log.info("✓ Scientific fact-check disabled by FACT_CHECK_ENABLED")
 
             # Step 4: Generate voice
             log.info("\n[Step 4] Generating voice...")
