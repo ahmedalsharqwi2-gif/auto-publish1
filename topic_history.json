@@ -689,11 +689,23 @@
       "region": "",
       "status": "published",
       "source": "science-pipeline",
-      "reservation_id": "adbc5f8888db403c94e8335856c79b8d",
       "reserved_at": "2026-10-03T16:20:01Z",
+      "published_at": "2026-10-03T16:20:08Z",
       "run_id": "37136058754",
-      "repository": "ahmedalsharqwi2-gif/science-discovery-shorts",
-      "published_at": "2026-10-03T16:20:08Z"
+      "reservation_id": "adbc5f8888db403c94e8335856c79b8d",
+      "repository": "ahmedalsharqwi2-gif/science-discovery-shorts"
+    },
+    {
+      "id": "28c0be32ae4fff0b69fc",
+      "title": "كيف يتشكل البرق الكروي؟ أسرار ظاهرة نادرة في السحب.",
+      "hook": "س: كيف يتشكل البرق الكروي؟ خ: ي عد البرق الكروي ظاهرة نادرة ت ظهر ك رة من الضوء تتجلى في السحب. ش: في البداية، ت جمع الشحنات الكهربائية داخل السحب، حيث ت فر غ الجسيمات",
+      "region": "",
+      "status": "reserved",
+      "source": "science-pipeline",
+      "reservation_id": "e3dbe3ee8a174d7a8767d44c6ced4582",
+      "reserved_at": "2026-10-03T18:39:12Z",
+      "run_id": "37144343497",
+      "repository": "ahmedalsharqwi2-gif/science-discovery-shorts"
     }
   ]
 }
