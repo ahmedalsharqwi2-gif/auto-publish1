@@ -243,15 +243,16 @@ jobs:
           GITHUB_REPOSITORY: ${{ github.repository }}
 
           # --- Duration and word-count window ---
-          # Natural speech is never time-stretched; accept recordings from
-          # 55s to 90s so a 59.95s render is not rejected at the boundary.
+          # Reels must stay below 90 seconds. Keep a one-second safety margin
+          # so encoding/container rounding cannot push a published video over
+          # the platform limit.
           MIN_AUDIO_SECONDS: '55'
-          MAX_AUDIO_SECONDS: '90'
+          MAX_AUDIO_SECONDS: '89'
           TARGET_AUDIO_SECONDS: '85'
           # main.py reads MIN_WORDS/MAX_WORDS; the final MP3 duration remains
-          # the authoritative gate around this safer 160–168 word window.
-          MIN_WORDS: '160'
-          MAX_WORDS: '168'
+          # the authoritative gate around this safer 140–150 word window.
+          MIN_WORDS: '140'
+          MAX_WORDS: '150'
           # BUFFER_CHANNEL_IDS is stored positionally as TikTok, YouTube,
           # Facebook in this repository's secret.
           PUBLISH_CHANNELS: 'tiktok,youtube,facebook'

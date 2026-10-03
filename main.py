@@ -129,7 +129,7 @@ class AutoPublishPipeline:
                 return False
 
             audio_duration = probe_duration(output_path)
-            log.info("✓ Audio duration: %.2fs (required %.0f–%.0fs)", audio_duration, MIN_AUDIO_SECONDS, MAX_AUDIO_SECONDS)
+            log.info("✓ Audio duration: %.2fs (required %.0f–%.0fs; reels safety cap)", audio_duration, MIN_AUDIO_SECONDS, MAX_AUDIO_SECONDS)
             if not MIN_AUDIO_SECONDS <= audio_duration <= MAX_AUDIO_SECONDS:
                 log.error(
                     "Audio duration outside publishing window: %.2fs; refusing to publish",
